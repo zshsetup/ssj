@@ -492,8 +492,9 @@ A client and a server talk only if they speak the same protocol version.
   test that hangs. The settings are in `.config/nextest.toml`; CI uses the `ci` profile, which
   retries a failed test once and lists it as flaky. `cargo test` works too, but it does not stop
   a hanging test.
-- `bench/bench.py` compares `ssh` with `ssj` over UDP and the `ssh` channel: bulk output,
-  keystroke latency, and an 8 MiB paste. It needs Python 3 and the release builds in
+- `bench/bench.py` compares `ssh`, `mosh`, `et`, `tssh`, and `ssj` over UDP and the `ssh` channel: bulk output,
+  keystroke latency, an 8 MiB paste, the time to log in, and the recovery from outages. Tools that
+  are not installed are skipped. See the Benchmark section of the specification. It needs Python 3 and the release builds in
   `target/release`.
 - `bench/docker-bench.sh` runs it between two Docker containers with a simulated link
   (`NETEM="delay 40ms loss 1%" bench/docker-bench.sh`), which is the setup to believe. See the

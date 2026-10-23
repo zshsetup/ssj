@@ -250,14 +250,14 @@ offsets, as after any loss.
 
 The lag of a stream is the longest of three times: the silence of the server, the age of a ping
 that no pong has answered, and the age of typed input that the server has not acknowledged. The
-second and the third matter because the two directions of a TCP connection recover on their own
+second and the third matter because the two directions of the TCP connection under `ssh` recover on their own
 retransmission timers after an outage: the server can be heard again while it hears nothing, and
 the keystrokes wait for the timer of the client. A stream with a lag of 3 seconds (`SPARE_AFTER`)
 gets spares: a second connection over the same transport is opened beside it, a new one every
 second while the lag lasts, up to six at once (`SPARES_AT_ONCE`), and the session moves to the
 first one that opens, with the same resume as after a loss. This is for a flaky link such as a
 train, where waiting for the 10 seconds and then for a login loses more time than the outage
-itself, and where the old TCP connection may sit in its long retransmission backoff when the
+itself, and where the old connection may sit in its long retransmission backoff when the
 network is back. The new ones every second hedge: a connection that was started on a dead path
 has lost its first packets and retries them at growing intervals, so a fresh one finds a returning
 network sooner. A spare gets 10 seconds to open (one that was started on a dead path retries its first
@@ -279,18 +279,14 @@ hundred through the move with the old connection swallowed, held back and delive
 working in one direction only, and they check that a silent second connection does not end the
 working one.
 
-Every connection on the stream transports starts a new `ssh`, which
+The first stream is the `ssh` that started the server (see above). Every later one starts a new `ssh`, which
 cannot ask for a passphrase (`BatchMode=yes`), so they need an agent or a shared connection
 (`ControlMaster auto`, `ControlPersist`) when the key has a passphrase. The same holds for the
 reconnects of a session that started over UDP and later fell back.
 
-Small packets on the TCP transport. Through `ssh -W`, the second of two small writes in the
-direction to the client can wait for the acknowledgement timer of the receiver, which runs for
-40 to 100 ms on Linux and adapts to the traffic of the connection. `bench/wprobe.py` shows it
-without `ssj`: a server that answers a byte with two small writes 0.2 ms apart is held for 51 ms
-in 61 of 300 cases through `ssh -W`, and in none when the two answers are one write, or the client
-answers in between. The `ssh` channel does not show it. `ssj` therefore never lets a small packet
-that nobody answers stand in front of the next one:
+Small packets. Under `ssh` the second of two small writes in the direction to the client can wait
+for the acknowledgement timer of the receiver (40 to 100 ms on Linux), so `ssj` never lets a small
+packet that nobody answers stand in front of the next one:
 
 - The server sends the `InputAck` in the write of the echo (queued frames go out in one write,
   after a yield that lets the sender queue the second one). Alone it goes out after one second
@@ -299,16 +295,7 @@ that nobody answers stand in front of the next one:
   alone only when 4 KiB of output are unacknowledged.
 - The client pings when nothing has come for half a second, not every second.
 
-`bench/docker-bench.sh --samples 4000 --jitter-ms 120 --only tcp` types 4000 keystrokes with
-random gaps against two containers (Ubuntu 24.04, OpenSSH 9.6) and counts the echoes that took
-10 ms more than the median (`stalls`). The same build before the change: 14 of 2000, 17 of 1500
-(51 ms each). With acknowledgements held back on the server only: 1 of 4000. With the change
-described here: 0 of 4000 (slowest echo 10.5 ms, median 1.6 ms), and 0 of 900 with gaps of up to
-1.2 s between keystrokes and 193 pings among them. UDP and the `ssh` channel never showed it.
-
-Not done: padding a write that follows an unanswered one to more than one packet. A padded TLS
-record spans two packets, its tail waits for the acknowledgement of the first, and the receiver
-cannot read the record without it: 81 stalls in 4000.
+UDP never showed the effect. `bench/wprobe.py` shows it without `ssj`.
 
 ### Destination, address, and names
 
@@ -463,41 +450,56 @@ redraw.
 
 ### Benchmark
 
-`bench/bench.py` (Python 3, standard library only) runs `ssh` and `ssj` over UDP, TCP, and the
-`ssh` channel against one host, each client on a pseudo terminal as a user runs it:
+`bench/bench.py` (Python 3, standard library only) runs `ssh` and `ssj` over UDP and the `ssh`
+channel against one host, each client on a pseudo terminal as a user runs it:
 
 - bulk output: `dd | tr` of 256 MiB by default, in MB/s, the best of three rounds;
 - keystroke latency: one byte at a time into a raw `cat`, the median, 95th percentile, and maximum
   of the round trip;
-- a paste of 8 MiB into `head -c`, in seconds.
+- a paste of 8 MiB into `head -c`, in seconds;
+- `--startup N`: the time from starting the client until the shell answers a command, and the
+  time to the end after `exit`;
+- `--train`: outages in the typing (see below).
 
-`--netem "delay 40ms loss 1%"` wraps the run in `tc qdisc add dev lo root netem ...` (Linux, root),
-which hits `ssh` and `ssj` alike when the host is `localhost`. `--server` picks the server file,
-which is how the glibc and the musl build are compared. The workflow `bench.yml` runs both builds
-with and without `netem` on a GitHub runner against its own `sshd`, by hand. `bench/linux-bench.sh`
-runs the same inside one container (`docker run ... sh bench/linux-bench.sh`), with the link on the
-loopback. There the hop from `sshd` to the server port is on the loopback too and meets the delay
-and the loss a second time, so its TCP numbers are not those of a host.
+**Clients.** `bench/clients.py` lists them, one entry each; `bench.py --list-clients` shows what
+each lacks on this machine. They are `ssh`, `ssh-C`, `udp` and `stdio` (each also compressed, as
+`udp-z` and `stdio-z`), and the tools ssj is compared with: `mosh`, `et` (Eternal Terminal), and
+`tssh` in four modes (`tssh-tcp`, `tssh`, `tssh-udp-over-tcp`, `tssh-kcp`). A client whose tools are
+missing is skipped and the reason is printed. `--only a,b` picks clients. To add a tool, add an entry
+to `CLIENTS`: its name, a function that builds the command line, the executables it needs on this
+machine and on the host, and whether it delivers every byte (`mosh` shows the latest screen and
+skips what went by, so its bulk rate says nothing about the transport). Every `ssj` row runs with
+`--no-auto-attach`, so a setting in `client.toml` cannot join a session that an earlier run left, and
+with `slow_client = "wait"`, so every byte arrives.
 
-`bench/docker-bench.sh [bench.py options]` is the benchmark to believe. A client and a server
-container share a Docker network (Ubuntu 24.04 by default, `IMAGE=`), the link is simulated on
-their network interfaces (`NETEM="delay 40ms loss 1%"`, empty for none; offloads are off so that
-the loss hits packets of normal size), and `sshd` runs in the server container, so the hop to the
-server port is local, as on a host. The binaries are the static musl builds. More switches:
-`CAPTURE=1` records the hop from `sshd` to the server and writes every packet to a file,
-`CLIENT_LOG=1` runs the client with `-vvv` and keeps the log (`target/ssj-client-log.txt`),
+**Against a real host.** `bench.py --host user@host --ssj PATH --server PATH-ON-THE-HOST`. A server
+path that starts with `~` is read on the host.
+
+**In containers.** `bench/docker-bench.sh [bench.py options]` is the benchmark to believe. A client
+and a server container share a Docker network (Ubuntu 24.04 by default, `IMAGE=`), the link is
+simulated on their network interfaces (`NETEM="delay 40ms loss 1%"`, empty for none; offloads are
+off so that the loss hits packets of normal size), and `sshd` runs in the server container, so the
+hop to the server port is local, as on a host. The binaries are the static musl builds.
+`EXTRA="mosh et tssh"` installs the other tools in both containers (`bench/install-extras.sh`).
+More switches: `CAPTURE=1` records the hop from `sshd` to the server and writes every packet to a
+file, `CLIENT_LOG=1` runs the client with `-vvv` and keeps the log (`target/ssj-client-log.txt`),
 `TRACE=1` prints the socket options of `sshd`, and `PROBE=1` runs `bench/wprobe.py`.
-`bench.py --jitter-ms` adds a random gap between the keystrokes and the `stalls` column counts
-the echoes that took 10 ms more than the median (a run in which every echo is slow shows none,
-so read the median too). `CLIENT=host` runs the client on the machine you sit at, with its own
-TCP stack, against the server container behind a published port (UDP cannot reach the container:
-`--only ssh,tcp,stdio`, and leave `NETEM` empty). `TARGET_VOLUME` and `CLIENT_BIN` pick another
-build, which is how a release is compared with the working tree. `bench/check.py` checks the
-JSON of a clean and a lossy run against wide limits (UDP keystroke median under 5 ms, TCP and the
-`ssh` channel under 10 ms, at most 1 percent stalls, UDP at least three times as fast as `ssh` at
-1 percent loss); `bench.yml` runs both and the check on a GitHub runner.
+`TARGET_VOLUME` and `CLIENT_BIN` pick another build, which is how a release is compared with the
+working tree; when two trees are built in one volume, touch the sources first, since cargo goes by
+modification times. `CLIENT=host` runs the client on the machine you sit at, against the server
+container behind a published port (UDP cannot reach the container: `--only ssh,stdio`, and leave
+`NETEM` empty). `bench.py --jitter-ms` adds a random gap between the keystrokes and the `stalls`
+column counts the echoes that took 10 ms more than the median (a run in which every echo is slow
+shows none, so read the median too).
 
-The train ride: `NETEM=train bench/docker-bench.sh --train --outages 5,15 --quiet 10` simulates
+`bench/linux-bench.sh` runs the same inside one container with the link on the loopback; there the
+hop from `sshd` to the server port meets the delay and the loss a second time, so use it for
+nothing but a quick check. `bench/check.py` checks the JSON of a clean and a lossy run against wide
+limits (UDP keystroke median under 5 ms, the `ssh` channel under 10 ms, at most 1 percent stalls,
+UDP at least three times as fast as `ssh` at 1 percent loss); the workflow `bench.yml` runs both
+and the check on a GitHub runner.
+
+**The train ride.** `NETEM=train bench/docker-bench.sh --train --outages 5,15 --quiet 10` simulates
 the link of a train. `NETEM=train` is a delay of 80 ms with 40 ms of jitter and bursts of loss
 (`loss gemodel 1% 20% 70% 0.5%`, about 4 percent in all). `bench.py --train` types at the pace of
 a person and cuts a blackout into the typing for each of `--outages`: `iptables` drops every packet
@@ -505,58 +507,64 @@ of `eth0` in both directions while the interface and its address stay, as in a t
 tells the programs that the network is gone, and the keys typed meanwhile wait. At the end of the
 outage the script types a marker, and the time until its echo is the recovery. The table shows the
 keystroke latency outside the outages (median, 95th percentile, maximum), the echoes that did not
-arrive, and the recovery after each outage. Results (Ubuntu 24.04 containers on a Mac, 80 ms
-delay, 160 ms round trip, seconds from the end of the outage to the echo of the marker):
+arrive, and the recovery after each outage.
 
-| Client | After 5 s | After 12 s | After 12 s | After 20 s |
-| ------ | --------- | ---------- | ---------- | ---------- |
-| `ssh` | 1.2 | 6.7 | 10.9 | 27.6 |
-| `ssj` over UDP | 0.3 | 0.7 | 0.4 | 0.3 |
+**Results.** Each number is one run on one machine (the Linux ones in a container on an aarch64
+virtual machine, with `sshd` in the same container), so differences of a few percent are noise.
 
-`ssh` waits for the retransmission timer of its TCP connection, which has backed off during the
-outage. The streams of `ssj` before the spare connection gave up after 10 seconds and made a new
-`ssh`: 3.6 s after outages of 12 s, and 0.2 to 0.4 s after shorter ones, where the old connection
-recovered by itself. With the spare, in two runs of ten outages each per transport (4, 6, 8, 10,
-and 12 s, twice): TCP recovered in 0.26 to 0.43 s after all ten outages of the first run and in
-0.27 to 0.76 s after those of the second. Stdio recovered in 0.14 to 0.17 s after eight of the ten
-of the first run (6.2 s and 1.0 s after two outages of 4 and 6 s, not yet explained) and in 0.13 to
-0.46 s after all ten of the second. The median keystroke latency was 166 to 175 ms on all of them,
-which is
-the round trip. The numbers are from one machine and few runs: read them as a direction.
+Outages on the train link (80 ms delay, 160 ms round trip; seconds from the end of the outage to
+the echo of the marker, outages of 5 and 15 s, three runs of eight outages per transport on 0.2.0):
 
-On a Mac (Darwin arm64, OpenSSH 10.3, `CLIENT=host`, 1500 keystrokes with random gaps, no link
-simulated): the release candidate 0.1.0-rc5 (no longer published) needed a median of 45.4 ms per keystroke over TCP (every one
-of them waited for the acknowledgement timer), the working tree 2.9 ms (slowest 6.8 ms, no
-stalls). The `ssh` channel was fast in both (2.4 and 2.8 ms), and plain `ssh` had a median of 11.9
-ms.
+| Client | Recovery | Slower than 1 s |
+| ------ | -------- | --------------- |
+| `ssh` (earlier runs, outages of 5 to 20 s) | 1.2 to 27.6 s | all |
+| `ssj` over UDP | 0.25 to 0.4 s, once 0.87 s | 2 of 24 (1.4 and 2.2 s) |
+| `ssj` over the `ssh` channel | 0.12 to 0.21 s | none |
+
+`ssh` waits for the retransmission timer of its TCP connection, which backed off during the outage.
+A stream of `ssj` with a lag of 3 seconds gets spares (see Transports), which may be why the `ssh`
+channel recovers so much faster than `ssh`; this was not checked. The 1.4 to 2.2 s recoveries of UDP are the probe timeout of QUIC, which doubles after
+every unanswered probe; on this link a bad burst (70 percent loss) can eat two probes in a row. The
+log of a keystroke that took 1.29 s fits that (the answer came 1.29 s later, after a ping that was
+answered after 0.65 s), but no log of a slow recovery after an outage was caught. An earlier run of
+the `ssh` channel had one recovery of 6.7 s with two retypes, one in 32 outages.
+
+A standby connection that stays open, with the output and the typed input mirrored on it, was built
+and measured against this (24 outages per tree): it did not shorten the slow cases, the `ssh`
+channel had two of 24 above 1 s (2.7 s and 4.4 s with a retype) where the tree without it had none,
+and it cost a second session connection on the host for every client. It was not merged (see
+Considered and not planned).
+
+A real host (Linux x86-64 on a LAN, a round trip of about 0.7 ms) with OpenSSH 9.6:
+
+| | `ssh` | `ssj` UDP | `ssj` `ssh` channel |
+| --- | ---: | ---: | ---: |
+| bulk (MB/s) | 113 to 117 | 108 | 127 to 134 |
+| keystroke median (ms) | 7.5 to 9 | 1.0 to 1.3 | 1.3 |
+| first prompt of a login shell (s) | 0.57 | 0.59 | 0.59 |
+| `ls` as the command (s) | 0.19 | 0.19 | 0.18 |
+
+The login shell of that host takes 0.55 s to show a prompt, which is the floor for every client.
+With a command and no shell the cost of `ssj` over `ssh` is 20 ms: the server start and the
+handshake. The first `ssh` carries the first stream, so a fallback to the `ssh` channel costs no
+second login (before this the command took 0.42 s on that channel).
 
 On a link of 40 ms each way and 1 % loss (real packets, no loopback) one run gave: `ssh` 0.2 MB/s,
-`ssj` UDP 6.2 MB/s, `ssj` UDP with compression 25.9 MB/s, `ssj` TCP and the `ssh` channel
-0.2 to 0.3 MB/s, and a keystroke median of 105 ms for `ssh` and 93 to 97 ms for `ssj` (the round
-trip is 80 ms). Without a link (1 GB/s on the bridge): `ssh` 171 MB/s and 15 ms, `ssj` UDP
-184 MB/s and 0.87 ms, TCP 163 MB/s and 1.2 ms, the `ssh` channel 187 MB/s and 1.4 ms.
+`ssj` UDP 6.2 MB/s, `ssj` UDP with compression 25.9 MB/s, and the `ssh` channel 0.2 to 0.3 MB/s,
+and a keystroke median of 105 ms for `ssh` and 93 to 97 ms for `ssj` (the round trip is 80 ms).
+Without a link (1 GB/s on the bridge): `ssh` 171 MB/s and 15 ms, `ssj` UDP 184 MB/s and 0.87 ms,
+the `ssh` channel 187 MB/s and 1.4 ms.
 
-On a simulated train ride (`NETEM=train`: 80 ms delay with 40 ms jitter, bursts of loss of about 4
-percent in all, and outages of 4, 5, and 6 s, ten to twelve per client): `ssh` recovered in 1 to
-28 s, `ssj` over UDP in 0.3 to 0.7 s. TCP and the `ssh` channel took a median of about 0.3 s, and
-about 7 percent of their outages (6 of 72 in the last run) took 1 to 6 s (worst 4.3 s). The cause
-is the TCP of the new connection, which loses packets during its login as well; the floor of such a
-recovery is one login, 2 to 3 s. A standby connection that stays open would not remove this: it
-stalls in the same outage, so it would only help when the working one is stuck on a link that is
-still partly alive, and it would cost a session on the host for every client. `ssj` does not keep one.
+On a lossy link the congestion control of the server decides the rate of the TCP under `ssh` and
+of the `ssh` channel, since the server sends the output. With
+`net.ipv4.tcp_congestion_control=bbr` on the server (40 ms, 1 % loss) `ssh` went from 0.3 to
+6.7 MB/s and the `ssh` channel from 0.4 to 9.2. That is a setting for the administrator of the
+host: `ssj` runs without root and does not change it. Compression helps without it.
 
-Side note on TCP: on a lossy link the congestion control of the server decides the rate of the TCP
-and `ssh` transports, since the server sends the output. With `net.ipv4.tcp_congestion_control=bbr`
-on the server (40 ms, 1 % loss) `ssh` went from 0.3 to 6.7 MB/s, `ssj` TCP from 0.2 to 9.8, and the
-`ssh` channel from 0.4 to 9.2. That is a setting for the administrator of the host: `ssj` runs
-without root and does not change it. Compression helps without it (`tcp-z` 4.2 to 15.3 MB/s).
-
-Each number is one run on one machine (the Linux ones in a container on an aarch64 virtual
-machine, with `sshd` in the same container), so differences of a few percent are noise. The bulk
-column is MB/s, the latency is the median in milliseconds, and the paste is 8 MiB (2 MiB on the
-slow link, 4 MiB on the lossy one) in seconds. `udp-z` is `ssj` with `compress = "auto"`, and
-`ssh-C` is `ssh -C`. Every `ssj` row runs with `slow_client = "wait"`, so every byte arrives and
-the rows mean the same thing.
+The tables below are from the container and loopback runs of an earlier version, with the removed
+`tcp` rows left out. The bulk column is MB/s, the latency is the median in milliseconds, and the
+paste is 8 MiB (2 MiB on the slow link, 4 MiB on the lossy one) in seconds. `udp-z` is `ssj` with
+`compress = "auto"`, and `ssh-C` is `ssh -C`.
 
 Loopback, zeros (`--raw-bulk`, 256 MiB; this measures the transport and the program):
 
@@ -566,7 +574,6 @@ Loopback, zeros (`--raw-bulk`, 256 MiB; this measures the transport and the prog
 | ssh -C | 131 | 9.7 | 0.13 | 147 | 9.9 | 0.13 | 88 | 8.3 | 1.25 |
 | udp | 190 | 0.96 | 0.10 | 167 | 0.83 | 0.08 | 75 | 0.40 | 1.25 |
 | udp-z | 169 | 0.96 | 0.07 | 151 | 0.84 | 0.08 | 70 | 0.40 | 1.25 |
-| tcp | 177 | 1.31 | 0.09 | 154 | 1.11 | 0.09 | 65 | 0.53 | 1.68 |
 | stdio | 198 | 1.61 | 0.09 | 146 | 1.40 | 0.10 | 59 | 0.55 | 1.51 |
 
 Slow link (`tc netem rate 8mbit delay 25ms` on a loopback with an MTU of 1500, log-like text, 8
@@ -578,7 +585,6 @@ MiB; the link carries about 1 MB/s):
 | ssh -C | 3.4 | 62.1 | 0.41 | 2.9 | 63.7 | 0.41 |
 | udp | 0.9 | 58.5 | 2.37 | 0.9 | 58.4 | 2.36 |
 | udp-z | 5.5 | 59.1 | 0.63 | 2.9 | 57.1 | 0.62 |
-| tcp | 0.4 | 119.8 | 4.85 | 0.4 | 119.3 | 4.90 |
 | stdio | 0.8 | 62.4 | 2.69 | 0.8 | 62.7 | 2.55 |
 
 Lossy link (`delay 40ms loss 1%`, MTU 1500, zeros; only the rows without compression mean
@@ -588,7 +594,6 @@ anything, because zeros compress a thousand to one):
 | ------ | ---------- | ------------- | --------- | ------------ |
 | ssh | 0.2 | 103 | 0.3 | 104 |
 | udp | 0.7 | 92 | 0.5 | 91 |
-| tcp | 0.2 | 180 | 0.2 | 180 |
 | stdio | 0.3 | 86 | 0.2 | 88 |
 
 Reading them:
@@ -603,8 +608,8 @@ Reading them:
   speed; musl stays the default because it runs on every distribution.
 - On macOS the pseudo terminal hands out its data in pieces of exactly 1024 bytes (Linux: up to
   4 KiB), so every kilobyte of output is one pass through the event loop of the server. The shell
-  alone reaches 115 MB/s there, `ssh` 87, and `ssj` 75. The TCP tier is slower because its bytes
-  also pass through an `ssh -W` process. The gap to `ssh` on macOS is about 14 percent.
+  alone reaches 115 MB/s there, `ssh` 87, and `ssj` 75. The gap to `ssh` on macOS is about 14
+  percent.
 - On a slow link compression is what matters. Without it `ssj` and `ssh` both fill the link
   (0.8 to 0.9 MB/s). With it `ssj` carries log-like text at 3 to 5 MB/s, as `ssh -C` does, and a
   paste in a quarter of the time. `ssh -C` compresses a paste better (0.41 s against 0.63 s)
@@ -615,8 +620,6 @@ Reading them:
   test: the loopback has an MTU of 64 KiB, so a TCP segment is 40 times larger than a QUIC
   packet and the same loss rate hits it much less often. With an MTU of 1500 the comparison is
   fair.
-- The TCP tier is slower than the others on every link and takes twice the latency, since it adds
-  a hop through `ssh -W`. It exists for hosts where UDP is blocked.
 
 What the measurements changed (each found with `sample`, CPU times from `ps`, and counters):
 
@@ -677,7 +680,6 @@ as the base) times the start until the shell answers a command, and the end afte
 | --- | ---: | ---: |
 | `ssh` | 1.34 s | 0.16 s |
 | `ssj` UDP | 1.80 s | 0.27 s |
-| `ssj` TCP (a second `ssh -W`) | 3.25 s | 0.26 s |
 | `ssj` stdio (a second `ssh`) | 2.83 s | 0.16 s |
 
 - With a login shell that takes 0.4 s to start (`STARTUP_RC_DELAY=0.4`), `ssh` needs 1.66 s and
@@ -685,12 +687,14 @@ as the base) times the start until the shell answers a command, and the end afte
   changes (1.79 s against 1.35 s for `ssh`).
 - The bootstrap is one `ssh`, and its handshake is most of the time. `ssj` adds a retry and the
   QUIC handshake (two round trips), then `Hello` and `Welcome` (one more), then the shell starts.
-- The socket, TCP, and stdio transports open a second `ssh` connection, which costs as much as the
-  first.
+- The `ssh` channel opened a second `ssh` connection, which cost as much as the first; since 0.2.0 it
+  reuses the `ssh` that started the server. The table is from before that.
+- The login `ssh` starts before `ssh -G` is done, since the `SendEnv` patterns are needed only when
+  the input is written after the login.
 - Before this was measured, the end of a UDP session took two seconds: the server process ended
   before its close message left, and the client waited for an answer that never came. The server
   now waits for the close message to leave (at most one second, after the client has gone).
-- `ssh -G` runs once, before the bootstrap, since the `SendEnv` patterns go with it; the
+- `ssh -G` runs once, beside the login of the bootstrap, since the `SendEnv` patterns go with it; the
   `HostName` and the jump host come from the same answer. The lookup of the address for UDP runs
   while the bootstrap `ssh` runs, and no longer after it.
 
@@ -1416,9 +1420,16 @@ UDP phase:
 - Offering two protocol versions in the ALPN list: against the decision to keep the code small.
 - Power-state APIs for sleep and wake: they need a run loop or D-Bus for no gain, since waking always brings the interfaces back and fires the network watch.
 - Extra OSCs sent by `ssj` itself (desktop notification, progress indicator, badge): kept out for now.
-- `ControlMaster` for the second `ssh` of the socket, TCP, and stdio transports: a stale master socket after a network change hangs new `ssh` calls, which is what `ssj` exists to avoid.
+- `ControlMaster` for the second `ssh` of the stdio transport: a stale master socket after a network change hangs new `ssh` calls, which is what `ssj` exists to avoid.
 - A server-side terminal emulator or `smcup` tracking: against the dumb-pipe rule. Full-screen programs are covered by the escape rule.
-- Hole punching for hosts behind NAT: the TCP tier through `ssh` covers them.
+- Hole punching for hosts behind NAT: the `ssh` channel covers them.
+- A standby connection with the session mirrored on it, a path probe, and staggered copies of the
+  input (built for 0.2.0, about 1,500 lines): 24 outages per tree gave no faster recovery and two
+  slow ones with it, against none without. Dropped; the spares of a stream cover the cases it was for.
+- The transports `socket` (the control socket through `ssh -W`) and `tcp` (TLS through `ssh -W`):
+  removed in 0.2.0. On a test host a stream through `ssh -W` and one through `ssh host ssj-server --stdio` both opened in 0.16 s, since `sshd` runs the command without the login files of the
+  shell, so neither had an advantage. The line `SSJ CONNECT` still names the control socket
+  (`socket=PATH`) and has a third field `none` where earlier servers wrote the TCP port.
 - A manifest of server digests inside the client: built and removed again as too complex for what the release checksums and attestation already give.
 
 ## Decisions
