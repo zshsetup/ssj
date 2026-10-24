@@ -44,7 +44,7 @@ install_release() { # repository, program
         find "$work" -type f -name "$2" -exec install -m 755 {} /usr/local/bin/ \;
     status=$?
     rm -rf "$work"
-    return $status
+    return "$status"
 }
 
 install_tssh() {
@@ -58,7 +58,9 @@ esac
 
 for tool in $EXTRA; do
     case $tool in
-    mosh | et | tssh) "install_$tool" || echo "bench: $tool did not install" >&2 ;;
+    mosh) install_mosh || echo "bench: $tool did not install" >&2 ;;
+    et) install_et || echo "bench: $tool did not install" >&2 ;;
+    tssh) install_tssh || echo "bench: $tool did not install" >&2 ;;
     *) echo "bench: unknown tool $tool (mosh, et, tssh)" >&2 ;;
     esac
 done

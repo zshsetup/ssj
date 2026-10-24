@@ -6,7 +6,7 @@ Two ideas that share one piece of groundwork (a protocol 3 that is not tied to a
 
 1. **Relay through the first jump host**: the session speaks UDP (QUIC) across the
    flaky network to the first jump host, and ssh's stdio from there to the backend.
-2. **`ssj ssh`, a drop-in for `ssh`**: raw (pty-less) sessions so that tools such as
+1. **`ssj ssh`, a drop-in for `ssh`**: raw (pty-less) sessions so that tools such as
    Zed, rsync and git get resumable connections.
 
 ## 1. Use case and problem
@@ -76,16 +76,16 @@ question below has no good answer.
 
 1. Client runs `ssh -G backend`; a `proxyjump` with at least one hop selects the
    relay path (a `ProxyCommand` stays on the old path, since it can't be interpreted).
-2. Two ssh invocations, started in parallel:
+1. Two ssh invocations, started in parallel:
    - **To the backend through the jump** (as today, end-to-end authenticated):
      `ssj-server connect` prints the usual line with the backend's certificate
      fingerprint and token. This is the only source of trust for the pin.
    - **To the first jump:** `ssj-server relay --to backend` starts a per-session
      relay, opens a UDP port, and prints `SSJ RELAY <port> <relay-secret>`.
      The relay starts the leg with `ssh [-J rest] backend ssj-server stdio-datagrams`.
-3. The client dials QUIC at `jump:port`. The relay forwards packets; the backend's
+1. The client dials QUIC at `jump:port`. The relay forwards packets; the backend's
    certificate pin (from step 2, first ssh) authenticates the real peer.
-4. If any step fails, or QUIC does not come up within the existing probe time, use
+1. If any step fails, or QUIC does not come up within the existing probe time, use
    the ssh stdio tier through the jump, as now. The held first ssh already makes
    this fallback free.
 
@@ -140,10 +140,10 @@ farthest reachable host beats a relay.
 The relay's `ssh backend` needs credentials from the jump:
 
 1. The jump's own `~/.ssh/config` and keys, if it has them (try this first).
-2. Agent forwarding from the client: pass `-A` to the jump ssh when
+1. Agent forwarding from the client: pass `-A` to the jump ssh when
    `forwardagent yes` is in `ssh -G`. The leg only needs the agent while it
    authenticates, which happens inside the 20 s hold window.
-3. Variant D (reverse leg) if neither is acceptable.
+1. Variant D (reverse leg) if neither is acceptable.
 
 If the leg breaks later and can't be rebuilt, the client's reconnect falls back to a
 full bootstrap. The session itself lives on the backend and is not lost.
@@ -224,9 +224,9 @@ nothing is lost. Installing the server stays explicit (`ssj install HOST`).
 
 1. Protocol 3 and a pty-less backend (`Pipes` implementing `Backend`), raw client
    front end, exit codes, tests (1 GB byte-exact `cat` through outages).
-2. `ssj ssh` argument grammar, dispatch table, fallback, `ssj dropin`.
-3. Relay: quinn custom sockets, envelope, `ssj-server relay`, bootstrap, fallback.
-4. Benchmarks on the jump topology; docs (README, SPEC, "Considered and not planned").
+1. `ssj ssh` argument grammar, dispatch table, fallback, `ssj dropin`.
+1. Relay: quinn custom sockets, envelope, `ssj-server relay`, bootstrap, fallback.
+1. Benchmarks on the jump topology; docs (README, SPEC, "Considered and not planned").
 
 Phases 1-2 and 3 are independent; 3 could ship first if the jump case matters more.
 
