@@ -13,6 +13,7 @@
 //!   byte stream.
 //! - [`forward`] is the relay itself.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::io::{self, IoSliceMut};
 use std::net::SocketAddr;
@@ -25,7 +26,7 @@ use std::time::{Duration, Instant};
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
 use ring::hmac;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch};
 
@@ -184,6 +185,16 @@ where
     Ok(Some(()))
 }
 
+/// Largest chunk that is read from or written to a byte stream at once.
+const STREAM_BUFFER: usize = 64 * 1024;
+
+/// Appends a frame to `out`. The datagram must not be longer than [`MAX_DATAGRAM`].
+fn push_frame(out: &mut Vec<u8>, datagram: &[u8]) {
+    let length = u16::try_from(datagram.len()).expect("not longer than a datagram");
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(datagram);
+}
+
 /// Writes one frame, in a single write, and flushes.
 pub async fn write_frame<W>(writer: &mut W, datagram: &[u8]) -> io::Result<()>
 where
@@ -301,9 +312,13 @@ impl AsyncUdpSocket for EnvelopeSocket {
     }
 
     fn try_send(&self, transmit: &Transmit) -> io::Result<()> {
-        let mut datagram = Vec::with_capacity(ENVELOPE_LEN + transmit.contents.len());
-        self.sealer.seal(transmit.contents, &mut datagram);
-        self.socket.try_send_to(&datagram, self.relay).map(|_| ())
+        thread_local! {
+            static SEALED: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+        SEALED.with_borrow_mut(|datagram| {
+            self.sealer.seal(transmit.contents, datagram);
+            self.socket.try_send_to(datagram, self.relay).map(|_| ())
+        })
     }
 
     fn poll_recv(
@@ -399,7 +414,7 @@ impl StreamSocket {
     /// Starts the tasks that move frames between the stream and the socket. The peer address is
     /// the one that QUIC sees for the client; it is made up, since the packets come out of a pipe.
     /// Must run inside the tokio runtime.
-    pub fn new<R, W>(mut reader: R, mut writer: W) -> Arc<Self>
+    pub fn new<R, W>(reader: R, mut writer: W) -> Arc<Self>
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
@@ -409,16 +424,27 @@ impl StreamSocket {
         let (end, ended) = watch::channel(false);
         let end_reading = end.clone();
         tokio::spawn(async move {
+            let mut reader = BufReader::with_capacity(STREAM_BUFFER, reader);
             let mut frame = Vec::new();
             while let Ok(Some(())) = read_frame(&mut reader, &mut frame).await {
                 // a full queue drops the packet
-                let _ = from_stream.try_send(frame.clone());
+                let _ = from_stream.try_send(std::mem::take(&mut frame));
             }
             let _ = end_reading.send(true);
         });
         tokio::spawn(async move {
+            let mut out = Vec::with_capacity(STREAM_BUFFER);
             while let Some(datagram) = to_stream.recv().await {
-                if write_frame(&mut writer, &datagram).await.is_err() {
+                out.clear();
+                push_frame(&mut out, &datagram);
+                // whatever else is queued goes in the same write
+                while out.len() < STREAM_BUFFER - 2 - MAX_DATAGRAM {
+                    let Ok(next) = to_stream.try_recv() else {
+                        break;
+                    };
+                    push_frame(&mut out, &next);
+                }
+                if writer.write_all(&out).await.is_err() || writer.flush().await.is_err() {
                     break;
                 }
             }
@@ -497,7 +523,7 @@ pub const IDLE: Duration = Duration::from_secs(30 * 60);
 pub async fn forward<R, W>(
     udp: Arc<UdpSocket>,
     secret: &[u8; SECRET_LEN],
-    mut reader: R,
+    reader: R,
     mut writer: W,
     idle: Duration,
 ) -> io::Result<()>
@@ -505,6 +531,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let mut reader = BufReader::with_capacity(STREAM_BUFFER, reader);
     let opener = Opener::new(secret, Direction::ToServer);
     let sealer = Sealer::new(secret, Direction::ToClient);
     let client: Mutex<Option<SocketAddr>> = Mutex::new(None);
@@ -512,6 +539,7 @@ where
 
     let to_server = async {
         let mut datagram = vec![0u8; MAX_DATAGRAM + ENVELOPE_LEN];
+        let mut out = Vec::with_capacity(2 + MAX_DATAGRAM);
         loop {
             let (n, from) = udp.recv_from(&mut datagram).await?;
             let Some(opened) = opener.open(&datagram[..n]) else {
@@ -521,7 +549,10 @@ where
                 *client.lock().expect("not poisoned") = Some(from);
             }
             *heard.lock().expect("not poisoned") = Instant::now();
-            write_frame(&mut writer, opened.payload).await?;
+            out.clear();
+            push_frame(&mut out, opened.payload);
+            writer.write_all(&out).await?;
+            writer.flush().await?;
         }
     };
     let to_client = async {

@@ -53,6 +53,9 @@ def command_line(client: str, args: argparse.Namespace, remote: str) -> list[str
     ssh = f"ssh -F {args.ssh_config}"
     if client == "ssh":
         return [*ssh.split(), DESTINATION, remote]
+    if client == "ssh_tty":
+        # with a terminal, like ssj: the same pty on the backend
+        return [*ssh.split(), "-tt", DESTINATION, remote]
     relay = "first" if client == "relay" else "none"
     return [
         args.ssj,
@@ -122,7 +125,7 @@ def first_connect(client: str, args: argparse.Namespace) -> dict[str, Any]:
         if result.first_byte is not None:
             arrived.append(result.first_byte)
     out: dict[str, Any] = {"output_s": median(arrived), "runs": len(arrived)}
-    if client != "ssh":
+    if client in ("stdio", "relay"):
         for _ in range(args.runs):
             result = run(command_line(client, args, f"sleep {SETTLE}; echo ok"))
             when = log_time(result.log, "session running over relay")
@@ -166,7 +169,7 @@ def main() -> None:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     results: dict[str, Any] = {}
-    for client in ("ssh", "stdio", "relay"):
+    for client in ("ssh", "ssh_tty", "stdio", "relay"):
         results[client] = {
             "first": first_connect(client, args),
             "bulk_from_start": bulk(client, args, 0),
@@ -178,6 +181,7 @@ def main() -> None:
         return
     names = {
         "ssh": "ssh -J",
+        "ssh_tty": "ssh -tt -J",
         "stdio": "ssj, ssh channel",
         "relay": "ssj, relay",
     }
