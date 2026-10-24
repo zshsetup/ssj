@@ -432,6 +432,7 @@ impl<B: Backend> Actor<B> {
             }
             // the client is here: the connection before it is replaced.
             self.lose();
+            self.announce_exit_again();
             self.active = self.incoming.take();
             self.detached_since = None;
             self.detached_on_purpose = false;
@@ -598,13 +599,17 @@ impl<B: Backend> Actor<B> {
             let status = status.expect("exit is queued after the status is known");
             return Some(SessionEnd::ShellExited(status));
         }
-        if let Some(s) = self.shell.as_mut().filter(|_| finished) {
-            // the status may not have arrived: it goes out again to the next connection, and a
-            // close confirms it.
+        self.announce_exit_again();
+        None
+    }
+
+    /// The status of the shell may not have arrived at the connection that is gone or replaced: it
+    /// goes out again to the next connection, and a close confirms it.
+    fn announce_exit_again(&mut self) {
+        if let Some(s) = self.shell.as_mut().filter(|s| s.exit_queued) {
             s.exit_queued = false;
             self.exit_lost = Some(Instant::now());
         }
-        None
     }
 
     async fn on_agent_connected(&mut self, stream: io::Result<UnixStream>) {

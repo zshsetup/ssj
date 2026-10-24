@@ -152,6 +152,10 @@ struct Client {
     current: usize,
     /// A connection that opened by itself and is to carry the session, with its tier.
     prepared: Option<(Link, usize)>,
+    /// The link that a switch leaves, held until the server has answered on the new one. With
+    /// nobody attached for a moment the server would treat the shell as unattended and forget its
+    /// output, and a transfer would lose what it wrote meanwhile.
+    retiring: Option<Link>,
     /// Failed attempts on the current tier since the last success.
     failures: usize,
     /// Whether a connection was ever made, so that the order of the tiers is settled.
@@ -197,6 +201,7 @@ pub async fn run_session(params: Params, io: Io) -> Result<Finished, String> {
         params,
         current: 0,
         prepared: None,
+        retiring: None,
         failures: 0,
         linked_once: false,
         note: None,
@@ -237,7 +242,10 @@ impl Client {
                 hello_name(&hello),
                 self.params.tiers[self.current].name()
             );
-            match self.establish_watched(&hello).await {
+            let attempt = self.establish_watched(&hello).await;
+            // the server has answered on the new link or the attempt failed: the old one can go.
+            self.retiring = None;
+            match attempt {
                 Attempt::Fatal(message) => {
                     vlog!(1, "cannot continue: {message}");
                     self.clear_status_at_end().await;
@@ -256,6 +264,7 @@ impl Client {
                         Pumped::Switch(better, tier) => {
                             vlog!(1, "switching to {}", self.params.tiers[tier].name());
                             self.prepared = Some((better, tier));
+                            self.retiring = Some(link);
                             continue;
                         }
                     }

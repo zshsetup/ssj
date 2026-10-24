@@ -1221,6 +1221,31 @@ async fn an_exit_status_that_may_not_have_arrived_is_sent_again() {
     );
 }
 
+// the exit status went to a connection that is replaced by a newer one while it is still open, as
+// when the session moves from the ssh channel to a relay at the end of a transfer.
+#[tokio::test]
+async fn an_exit_status_is_sent_again_to_a_connection_that_replaces_the_one_that_got_it() {
+    let harness = start(config("printf done; exit 7"));
+    let mut first = harness.connect().await;
+    first.start().await;
+    let seen = first.read_until(|s| s.exit.is_some()).await;
+    assert_eq!(seen.exit, Some(ExitStatus::Code(7)));
+
+    let mut second = harness.connect().await;
+    second
+        .send(ClientFrame::Hello(Hello::Resume {
+            size: size(),
+            output_offset: seen.output.len() as u64,
+        }))
+        .await;
+    let again = second.read_until(|s| s.exit.is_some()).await;
+    assert_eq!(again.exit, Some(ExitStatus::Code(7)));
+    second.send(ClientFrame::Close).await;
+    assert!(
+        matches!(harness.end().await, SessionEnd::ShellExited(status) if status.code() == Some(7))
+    );
+}
+
 #[tokio::test]
 async fn nobody_returns_for_the_exit_status_so_the_session_ends_after_the_grace_period() {
     let mut cfg = config("exit 9");

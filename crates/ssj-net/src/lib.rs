@@ -294,6 +294,13 @@ fn base_transport() -> quinn::TransportConfig {
     let mut transport = quinn::TransportConfig::default();
     // the session must outlive long outages, and the keepalive notices a returning network.
     transport.max_idle_timeout(None);
+    // QUIC calls a packet lost when three later ones were acknowledged before it, and a network
+    // that reorders packets (jitter on a wireless hop, two paths) makes that happen with nothing
+    // lost: the sender then cuts its rate over and over, and a bulk transfer over a link with 3 ms
+    // of jitter (which reorders on the testbed) fell far behind the same one over TCP. A real loss
+    // is still found after a round trip by the time threshold, so only the earliest detection is
+    // given up.
+    transport.packet_threshold(PACKET_THRESHOLD);
     transport.keep_alive_interval(Some(Duration::from_secs(1)));
     // a paste must not spend several round trips on slow start.
     match congestion() {
@@ -324,6 +331,9 @@ fn base_transport() -> quinn::TransportConfig {
     transport.max_concurrent_bidi_streams(8u8.into());
     transport
 }
+
+/// Packets of reordering that are not taken for a loss (QUIC itself starts with 3).
+pub const PACKET_THRESHOLD: u32 = 100;
 
 /// Packets that may arrive without being acknowledged (the peer is asked for this).
 pub const ACK_ELICITING_THRESHOLD: u8 = 7;

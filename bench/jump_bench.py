@@ -72,6 +72,12 @@ def command_line(client: str, args: argparse.Namespace, remote: str) -> list[str
         args.server,
         "--relay",
         relay,
+        # ssh delivers every byte, so ssj must too: with `drop` (the default) it skips output that a
+        # slow client cannot take, which is right for a terminal and wrong for a transfer
+        "--server-arg",
+        "--slow-client",
+        "--server-arg",
+        args.slow_client,
         "-vv",
         args.destination,
         "--",
@@ -155,7 +161,8 @@ def first_connect(client: str, args: argparse.Namespace) -> dict[str, Any]:
 def bulk(client: str, args: argparse.Namespace, wait: int) -> dict[str, Any]:
     """The speed of a large output, after `wait` seconds of idle."""
     size = args.bulk_mb * 1_000_000
-    remote = f"yes {LINE} | head -c {size}"
+    # random bytes by default: ssj compresses output that the link holds back, and text flatters it
+    remote = f"yes {LINE} | head -c {size}" if args.text else f"head -c {size} /dev/urandom"
     if wait:
         remote = f"sleep {wait}; {remote}"
     speeds, totals = [], []
@@ -185,6 +192,10 @@ def main() -> None:
     parser.add_argument("--server", required=True)
     parser.add_argument("--bulk-mb", type=int, default=30)
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument(
+        "--text", action="store_true", help="compressible output instead of random bytes"
+    )
+    parser.add_argument("--slow-client", default="wait", choices=["wait", "drop"])
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     results: dict[str, Any] = {}
