@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ruff: noqa: T201
-"""Compares a host behind a jump host over a flaky link: ssh -J, ssj over the ssh channel, and ssj
-with the relay (UDP to the jump host).
+"""Compares a host behind a jump host over a flaky link.
+
+The clients are ssh -J, ssj over the ssh channel, and ssj with the relay (UDP to the jump host).
 
 It runs in the client container of bench/docker-jump-bench.sh, which sets up the link. Each
 client runs a command on the backend through the jump host, with no terminal:
@@ -42,6 +43,8 @@ SETTLE = 8
 
 @dataclass
 class Result:
+    """What one run of a client gave."""
+
     first_byte: float | None
     total: float
     size: int
@@ -50,6 +53,7 @@ class Result:
 
 
 def command_line(client: str, args: argparse.Namespace, remote: str) -> list[str]:
+    """The command line that runs `remote` on the backend with `client`."""
     ssh = f"ssh -F {args.ssh_config}"
     if client == "ssh":
         return [*ssh.split(), DESTINATION, remote]
@@ -76,14 +80,15 @@ def command_line(client: str, args: argparse.Namespace, remote: str) -> list[str
 def run(argv: list[str]) -> Result:
     """Runs a client without a terminal and times its output."""
     began = time.monotonic()
-    child = subprocess.Popen(  # noqa: S603
+    child = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    assert child.stdout is not None
-    assert child.stderr is not None
+    if child.stdout is None or child.stderr is None:
+        msg = "the pipes are not there"
+        raise RuntimeError(msg)
     err: list[bytes] = []
     thread = threading.Thread(target=lambda: err.append(child.stderr.read()))  # type: ignore[union-attr]
     thread.start()
@@ -115,10 +120,12 @@ def log_time(log: str, text: str) -> float | None:
 
 
 def median(values: list[float]) -> float | None:
+    """The median, or `None` without values."""
     return statistics.median(values) if values else None
 
 
 def first_connect(client: str, args: argparse.Namespace) -> dict[str, Any]:
+    """The time to the first output, and for ssj the time until the relay carries the session."""
     arrived, switched = [], []
     for _ in range(args.runs * 2):
         result = run(command_line(client, args, "echo ok"))
@@ -137,6 +144,7 @@ def first_connect(client: str, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def bulk(client: str, args: argparse.Namespace, wait: int) -> dict[str, Any]:
+    """The speed of a large output, after `wait` seconds of idle."""
     size = args.bulk_mb * 1_000_000
     remote = f"yes {LINE} | head -c {size}"
     if wait:
@@ -160,6 +168,7 @@ def bulk(client: str, args: argparse.Namespace, wait: int) -> dict[str, Any]:
 
 
 def main() -> None:
+    """Runs every client and prints the table."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--ssh-config", required=True)
     parser.add_argument("--ssj", required=True)
@@ -189,7 +198,10 @@ def main() -> None:
     def cell(value: float | None, unit: str = "s") -> str:
         return "-" if value is None else f"{value:.2f}{unit}"
 
-    print(f"{'':20} {'first output':>13} {'on relay':>9} {'bulk from start':>16} {'bulk after 8 s idle':>20}")
+    heads = (
+        f"{'first output':>13} {'on relay':>9} {'bulk from start':>16} {'bulk after 8 s idle':>20}"
+    )
+    print(f"{'':20} {heads}")
     for client, name in names.items():
         r = results[client]
         print(
