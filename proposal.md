@@ -2,12 +2,14 @@
 
 Status: draft, nothing here is implemented. Written against 0.2.0 (protocol 2).
 
-Two ideas that share one piece of groundwork (a protocol 3 that is not tied to a pty):
+Two independent ideas:
 
-1. **Relay through the first jump host**: the session speaks UDP (QUIC) across the
-   flaky network to the first jump host, and ssh's stdio from there to the backend.
-1. **`ssj ssh`, a drop-in for `ssh`**: raw (pty-less) sessions so that tools such as
-   Zed, rsync and git get resumable connections.
+1. **Relay through the first jump host** (release 0.2.1, protocol 2): the session
+   speaks UDP (QUIC) across the flaky network to the first jump host, and ssh's stdio
+   from there to the backend.
+1. **`ssj ssh`, a drop-in for `ssh`** (release 0.3.0, protocol 3 that is not tied to
+   a pty): raw (pty-less) sessions so that tools such as Zed, rsync and git get
+   resumable connections.
 
 ## 1. Use case and problem
 
@@ -115,15 +117,36 @@ farthest reachable host beats a relay.
 
 - **Version 1:** relay on the first hop only; everything beyond it stays an ssh leg
   (`ssh -J rest backend`).
-- **Per-host setting** `relay = auto | first | last | none`, default `first`.
-  `none` keeps today's ssh stdio, `last` uses the farthest hop that answers.
-- **`auto` (later, only if a real chain needs it):** start the control ssh to each
-  candidate hop in parallel and race the QUIC handshakes, then use the farthest hop
-  that answers. This costs one extra ssh and one server process per hop, so it only
-  makes sense for chains of two or three, and hops without `ssj-server` are skipped.
+- **Setting** `relay = "auto" | "first" | "none"` in `client.toml` (and a flag),
+  settable per host like the other settings:
+  - `none`: today's ssh stdio through the jump, with no extra connection.
+  - `first`: use the relay on the first jump; the missing-server rules below apply.
+  - `auto`: use the relay on the first jump when it has `ssj-server`, otherwise
+    behave as `none`, without asking or installing.
+- **Default:** `none` until the relay has proven itself in the benchmarks, then
+  `auto`. The relay needs a second connection to the jump (a second authentication
+  unless `ControlMaster` is set), which should not surprise anyone.
+- **Later, only if a real chain needs it:** `last` (the farthest hop that answers)
+  and an `auto` that starts the control ssh to every candidate hop in parallel and
+  races the QUIC handshakes. That costs an ssh and a server process per hop, so it
+  only makes sense for chains of two or three.
 - ssh through the whole chain is used only for authentication, the certificate pin
   and the stdio fallback. The pin always comes from that end-to-end ssh, so it does
   not depend on which hop hosts the relay.
+
+### Server missing on the jump
+
+The existing `auto_install = "ask" | "always" | "never"` is reused, with the jump as
+the destination (`ssj install JUMP`):
+
+| `relay` | Jump has no `ssj-server` |
+|---|---|
+| `first` | The `auto_install` policy: ask on a terminal, install, or just print the hint. If it is declined or fails, print one line (`ssj: no ssj-server on JUMP, using ssh through it`) and continue over ssh stdio. The session does not abort, since it works without the relay. |
+| `auto` | Never ask and never install, whatever `auto_install` says: a jump is a host we only pass through. Skip silently; `-v` says why. Optionally a one-time hint per host, kept in a small state file (not in version 1). |
+| `none` | Nothing happens. |
+
+The check runs in the ssh to the jump that starts in parallel with the one to the
+backend, so a missing server costs no extra waiting.
 
 ### Library work
 
@@ -222,13 +245,27 @@ nothing is lost. Installing the server stays explicit (`ssj install HOST`).
 
 ## 7. Phases
 
+**Release 0.2.1 (protocol stays 2): the relay.** It is a transport change plus a new
+bootstrap line, so it needs no new protocol version.
+
+1. Quinn custom sockets and the envelope in `ssj-net`, with the parser fuzzed.
+1. `ssj-server relay` (UDP socket, ssh leg, idle timeout, session cap) and the
+   `SSJ RELAY` line.
+1. Client: read `proxyjump` from `ssh -G`, the `relay` setting and flag, the two
+   parallel bootstraps, the missing-server rules, fallback to ssh stdio.
+1. Docker topology and benchmarks; README, SPEC and "Considered and not planned".
+
+0.2.1 ships when the relay beats ssj stdio through the jump on the flaky link and
+matches a direct UDP session on the first leg. The default stays `none` until then.
+
+**Release 0.3.0 (protocol 3): raw sessions and `ssj ssh`.**
+
 1. Protocol 3 and a pty-less backend (`Pipes` implementing `Backend`), raw client
    front end, exit codes, tests (1 GB byte-exact `cat` through outages).
 1. `ssj ssh` argument grammar, dispatch table, fallback, `ssj dropin`.
-1. Relay: quinn custom sockets, envelope, `ssj-server relay`, bootstrap, fallback.
-1. Benchmarks on the jump topology; docs (README, SPEC, "Considered and not planned").
+1. Benchmarks and docs.
 
-Phases 1-2 and 3 are independent; 3 could ship first if the jump case matters more.
+The two releases are independent.
 
 ## 8. Open questions
 
@@ -237,4 +274,4 @@ Phases 1-2 and 3 are independent; 3 could ship first if the jump case matters mo
 - Silent fallback to plain ssh when the remote has no `ssj-server`, or warn once?
 - Give-up default of about 60 s for non-interactive sessions?
 - Does the jump host run `ssj-server` already (it must, for the relay)?
-- Is `relay = first` the right default, or is `auto` needed for some of your chains?
+- Is `none` the right default for 0.2.1, and `auto` after the benchmarks?
