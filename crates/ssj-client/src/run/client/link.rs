@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use quinn::Endpoint;
+use ssj_net::relay::{EnvelopeSocket, RelayKeys};
 use ssj_net::{SERVER_NAME, client_tls, quic_client};
 use ssj_proto::bootstrap::sanitize;
 use ssj_proto::frame::MAX_DATA_LEN;
@@ -46,12 +47,23 @@ impl Client {
         let Some(endpoint) = &self.endpoint else {
             return;
         };
-        let Some(addr) = self.params.tiers.iter().find_map(|t| match t {
-            Tier::Udp { addr, .. } => Some(*addr),
+        let Some((addr, keys)) = self.params.tiers.iter().find_map(|t| match t {
+            Tier::Udp { addr, .. } => Some((*addr, None)),
+            Tier::Relay { addr, keys } => Some((*addr, Some(keys.clone()))),
             Tier::Stream { .. } => None,
         }) else {
             return;
         };
+        if let Some(keys) = keys {
+            let moved = EnvelopeSocket::bind(wildcard(&addr), addr, &keys)
+                .and_then(|socket| endpoint.rebind_abstract(socket));
+            vlog!(
+                1,
+                "moved the UDP socket to the current network: {}",
+                moved.map_or_else(|e| e.to_string(), |()| "ok".to_owned())
+            );
+            return;
+        }
         match std::net::UdpSocket::bind(wildcard(&addr)) {
             Ok(socket) => {
                 let local = socket.local_addr().ok();
@@ -126,12 +138,28 @@ impl Client {
     }
 
     /// The UDP socket, made on first use.
-    fn udp_endpoint(&mut self, addr: SocketAddr) -> Result<Endpoint, String> {
+    fn udp_endpoint(
+        &mut self,
+        addr: SocketAddr,
+        relay: Option<&RelayKeys>,
+    ) -> Result<Endpoint, String> {
         if let Some(endpoint) = &self.endpoint {
             return Ok(endpoint.clone());
         }
-        let mut endpoint = Endpoint::client(wildcard(&addr))
-            .map_err(|e| format!("cannot open a UDP socket: {e}"))?;
+        let mut endpoint = match relay {
+            Some(keys) => EnvelopeSocket::bind(wildcard(&addr), addr, keys)
+                .and_then(|socket| {
+                    Endpoint::new_with_abstract_socket(
+                        quinn::EndpointConfig::default(),
+                        None,
+                        socket,
+                        std::sync::Arc::new(quinn::TokioRuntime),
+                    )
+                })
+                .map_err(|e| format!("cannot open a UDP socket: {e}"))?,
+            None => Endpoint::client(wildcard(&addr))
+                .map_err(|e| format!("cannot open a UDP socket: {e}"))?,
+        };
         endpoint.set_default_client_config(quic_client(client_tls(
             &self.params.identity,
             self.params.connect.fingerprint,
@@ -155,9 +183,10 @@ impl Client {
     }
 
     pub(super) fn prepare_link(&mut self, idx: usize) -> LinkFuture {
-        let udp = match &self.params.tiers[idx] {
-            Tier::Udp { addr, .. } => Some(*addr),
-            Tier::Stream { .. } => None,
+        let (udp, keys) = match &self.params.tiers[idx] {
+            Tier::Udp { addr, .. } => (Some(*addr), None),
+            Tier::Relay { addr, keys } => (Some(*addr), Some(keys.clone())),
+            Tier::Stream { .. } => (None, None),
         };
         vlog!(
             1,
@@ -167,7 +196,7 @@ impl Client {
         );
         let opened = Instant::now();
         if let Some(addr) = udp {
-            let connecting = self.udp_endpoint(addr).and_then(|endpoint| {
+            let connecting = self.udp_endpoint(addr, keys.as_ref()).and_then(|endpoint| {
                 endpoint
                     .connect(addr, SERVER_NAME)
                     .map_err(|e| format!("udp: {e}"))
@@ -209,8 +238,7 @@ impl Client {
     /// and the stream starts at once when the session is on it already, so that a network where
     /// UDP does not work costs a fraction of a second and not the whole timeout of QUIC.
     async fn race(&mut self) -> Result<(Link, usize), String> {
-        let racing =
-            self.params.tiers.len() > 1 && matches!(self.params.tiers[0], Tier::Udp { .. });
+        let racing = self.params.tiers.len() > 1 && self.params.tiers[0].is_quic();
         if !racing {
             let idx = self.current;
             return self.prepare_link(idx).await.map(|link| (link, idx));

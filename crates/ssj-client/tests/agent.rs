@@ -155,6 +155,7 @@ async fn a_program_in_the_session_reaches_the_agent_of_the_client_but_only_for_s
             socket: None,
         },
         identity,
+        relay_ready: None,
         tiers: vec![Tier::Stream {
             name: "stdio",
             dial,

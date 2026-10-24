@@ -54,7 +54,7 @@ impl Context {
                 }
             }
             // handled by the caller, since the connection itself is needed.
-            Request::Stream => Reply::Error("not a stream".to_owned()),
+            Request::Stream | Request::Datagrams => Reply::Error("not a stream".to_owned()),
             Request::Attach(pin) => match self.frontend.lock().await.open(pin).await {
                 Ok(connect) => Reply::Connect(connect),
                 Err(err) => Reply::Error(err.to_string()),
@@ -98,6 +98,25 @@ async fn handle(stream: UnixStream, context: Arc<Context>) {
                     let _ = conns.send(bridge(stream)).await;
                 }
                 return;
+            }
+            Ok(Request::Datagrams) => {
+                // like a stream, and the packets of a relay come over it
+                if !context.frontend.lock().await.can_open_piped() {
+                    Reply::Error("no client was attached".to_owned())
+                } else {
+                    let reader = lines.into_inner().into_inner();
+                    if writer
+                        .write_all(format_reply(&Reply::Ok).as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if let Ok(stream) = reader.reunite(writer) {
+                        let _ = context.frontend.lock().await.open_piped(stream);
+                    }
+                    return;
+                }
             }
             Ok(request) => context.dispatch(request).await,
             Err(_) => Reply::Error("unknown request".to_owned()),

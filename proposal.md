@@ -1,6 +1,7 @@
 # Proposal: UDP on the flaky leg of a ProxyJump, and ssh as a drop-in
 
-Status: draft, nothing here is implemented. Written against 0.2.0 (protocol 2).
+Status: the relay (part 1) is implemented in 0.2.1 and described in the README and the specification; raw
+sessions and `ssj ssh` (part 2) are not implemented. Written against 0.2.0 (protocol 2).
 
 Two independent ideas:
 

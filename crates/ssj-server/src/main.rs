@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use ssj_server::cli::{self, Mode};
-use ssj_server::{control_cli, launch};
+use ssj_server::{control_cli, launch, relay};
 
 /// `ssj edit` asks the server to judge a new `server.toml` before it replaces the old one.
 fn check_config() -> ExitCode {
@@ -49,6 +49,8 @@ fn main() -> ExitCode {
             eprintln!("ssj-server: {message}");
             ExitCode::from(2)
         }
+        Ok(args) if args.mode == Mode::Relay && args.daemon_child => relay::run_child(&args),
+        Ok(args) if args.mode == Mode::Relay => relay::run_parent(),
         Ok(args) if args.mode != Mode::Serve => control_cli::run(&args),
         Ok(args) if args.daemon_child => launch::run_child(args),
         Ok(args) => launch::run_parent(&args),

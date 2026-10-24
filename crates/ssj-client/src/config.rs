@@ -6,7 +6,7 @@ use ssj_config::parsed;
 use ssj_net::{Compress, Congestion};
 use ssj_proto::EnvFilter;
 
-use crate::cli::{LocalEcho, Transport, parse_detach_key};
+use crate::cli::{LocalEcho, Relay, Transport, parse_detach_key};
 use crate::options::parse_ssh_command;
 
 /// What to do when the server is not installed on the host.
@@ -41,9 +41,14 @@ pub struct Config {
     /// More variables to send, besides TERM and the SendEnv of ssh.
     #[config(default = [], deserialize_with = send_env)]
     pub send_env: EnvFilter,
-    /// "auto", "udp", "socket", "tcp", or "stdio": how to reach the server.
+    /// "auto", "udp", or "stdio": how to reach the server.
     #[config(default = "auto")]
     pub transport: Transport,
+    /// "none", "auto", or "first": for a host behind a jump host (ProxyJump), whether UDP goes to
+    /// the first jump host, which passes it on over ssh. "auto" needs the server on the jump host
+    /// and does nothing without it; "first" asks to install it.
+    #[config(default = "none")]
+    pub relay: Relay,
     /// `ssj connect host` joins the only session without a client.
     #[config(default = false)]
     pub auto_attach: bool,

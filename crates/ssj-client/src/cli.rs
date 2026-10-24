@@ -29,6 +29,20 @@ pub enum Transport {
     Stdio,
 }
 
+/// Whether UDP goes to the first jump host and from there over `ssh`, for a destination behind one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Relay {
+    /// Everything goes over the `ssh` channel through the jump host.
+    #[default]
+    None,
+    /// A relay on the first jump host if it has the server, else as `none`, without asking.
+    Auto,
+    /// A relay on the first jump host; if it lacks the server, ask to install it (see
+    /// `auto_install`), and use the `ssh` channel if that is declined.
+    First,
+}
+
 /// Whether typed characters are shown before the server has echoed them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -99,6 +113,7 @@ pub struct Args {
     /// A control byte that detaches wherever it is typed; `None` turns it off.
     pub detach_key: Option<u8>,
     pub transport: Transport,
+    pub relay: Relay,
     /// Join the only session without a client instead of starting another one.
     pub auto_attach: bool,
     /// Programs on the host may use the ssh agent of this machine.
@@ -131,6 +146,7 @@ pub struct Explicit {
     pub ssh_command: bool,
     pub detach_key: bool,
     pub transport: bool,
+    pub relay: bool,
     pub auto_attach: bool,
     pub forward_agent: bool,
     pub local_echo: bool,
@@ -156,6 +172,7 @@ impl Args {
             server_binary: None,
             detach_key: Some(DEFAULT_DETACH_KEY),
             transport: Transport::Auto,
+            relay: Relay::None,
             auto_attach: false,
             forward_agent: false,
             local_echo: LocalEcho::Off,
@@ -196,6 +213,9 @@ impl Args {
         }
         if !self.explicit.transport {
             self.transport = config.transport;
+        }
+        if !self.explicit.relay {
+            self.relay = config.relay;
         }
         self.send_env = config.send_env.clone();
         if self.auto_install.is_none() {
@@ -413,6 +433,9 @@ impl Session {
         args.quiet = self.quiet;
         if let Some(transport) = self.transport {
             (args.transport, args.explicit.transport) = (transport, true);
+        }
+        if let Some(relay) = self.relay {
+            (args.relay, args.explicit.relay) = (relay, true);
         }
         if let Some(echo) = self.local_echo {
             (args.local_echo, args.explicit.local_echo) = (echo, true);

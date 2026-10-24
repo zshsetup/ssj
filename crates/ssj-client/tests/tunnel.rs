@@ -47,8 +47,9 @@ fn the_host_name_is_taken_from_the_ssh_configuration() {
         config,
         SshConfig {
             hostname: Some("server.example.org".to_owned()),
-            jump: false,
-            send_env: Vec::new(),
+            user: Some("tim".to_owned()),
+            port: Some(22),
+            ..SshConfig::default()
         }
     );
     let jump = parse_ssh_config("hostname 10.0.0.5\nproxyjump bastion\n");
@@ -67,4 +68,23 @@ fn the_sendenv_lines_of_ssh_are_the_patterns() {
         parse_ssh_config(text).send_env,
         ["LC_THEME", "LANG", "LC_*"]
     );
+}
+
+#[test]
+fn the_jump_hosts_user_port_and_agent_are_taken_from_the_ssh_configuration() {
+    let config = parse_ssh_config(
+        "user tim\nport 2222\nproxyjump a@jump:22, b@second\nforwardagent yes\n\
+         user other\n",
+    );
+    assert_eq!(config.proxy_jump, ["a@jump:22", "b@second"]);
+    assert!(config.jump && !config.proxy_command && config.forward_agent);
+    assert_eq!(
+        (config.user.as_deref(), config.port),
+        (Some("tim"), Some(2222))
+    );
+
+    let command = parse_ssh_config("proxycommand nc %h %p\nforwardagent no\n");
+    assert!(command.jump && command.proxy_command && !command.forward_agent);
+    assert!(command.proxy_jump.is_empty());
+    assert_eq!(parse_ssh_config("port x\n").port, None);
 }

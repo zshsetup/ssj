@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ssj_net::Identity;
+use ssj_net::relay::RelayKeys;
 use ssj_proto::bootstrap::Connect;
 use ssj_proto::{Env, WindowSize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -86,8 +87,13 @@ pub enum Tier {
         /// Finds the address again when it may have changed. `None` keeps `addr` for good.
         resolver: Option<Resolver>,
     },
-    /// A byte stream with TLS (TCP through `ssh -W`) or without (the socket through `ssh -W`, and
-    /// the `ssh` channel itself).
+    /// QUIC over UDP to a relay on a jump host, which passes the packets on over `ssh`.
+    Relay {
+        /// The relay.
+        addr: SocketAddr,
+        keys: RelayKeys,
+    },
+    /// A byte stream: the `ssh` channel itself.
     Stream { name: &'static str, dial: Dial },
 }
 
@@ -95,8 +101,14 @@ impl Tier {
     fn name(&self) -> &'static str {
         match self {
             Self::Udp { .. } => "udp",
+            Self::Relay { .. } => "relay",
             Self::Stream { name, .. } => name,
         }
+    }
+
+    /// Whether the tier is QUIC, directly or through a relay.
+    fn is_quic(&self) -> bool {
+        matches!(self, Self::Udp { .. } | Self::Relay { .. })
     }
 }
 
@@ -106,6 +118,9 @@ pub struct Params {
     pub connect: Connect,
     /// The ways to reach the server, in the order to try them.
     pub tiers: Vec<Tier>,
+    /// Notified when the first tier, a relay that was still starting, can be tried: a session that
+    /// began on a stream moves to it.
+    pub relay_ready: Option<std::sync::Arc<tokio::sync::Notify>>,
     /// Time for one attempt to connect and to get the welcome.
     pub attempt_timeout: Duration,
     /// Time the first tier gets in the first connection, before the next one is tried.

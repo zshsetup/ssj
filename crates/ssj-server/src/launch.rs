@@ -55,10 +55,19 @@ pub(crate) fn read_line_with_timeout(
     source: impl Read + Send + 'static,
     limit: Duration,
 ) -> Option<Vec<u8>> {
+    read_longer_line_with_timeout(source, limit, MAX_LINE)
+}
+
+/// Like [`read_line_with_timeout`] for a line of at most `max` bytes.
+pub(crate) fn read_longer_line_with_timeout(
+    source: impl Read + Send + 'static,
+    limit: Duration,
+    max: usize,
+) -> Option<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut line = Vec::new();
-        let mut reader = BufReader::new(source.take(MAX_LINE as u64));
+        let mut reader = BufReader::new(source.take(max as u64));
         let result = reader.read_until(b'\n', &mut line).map(|_| line);
         let _ = tx.send(result);
     });

@@ -30,6 +30,10 @@ pub enum Request {
     /// Turns the connection into the byte stream of a client (the `ssh` channel as transport).
     /// The reply `OK` comes first, and everything after it is frames.
     Stream,
+    /// Turns the connection into a carrier of QUIC packets, one frame each (see `ssj-net`'s
+    /// `relay`), for a client behind a relay. The endpoint uses the certificate of the last
+    /// `Attach`, so that the fingerprint that the client got from it is the right one.
+    Datagrams,
     /// Ends the session as if the terminal had been closed.
     Kill,
     /// Detaches the connected client: it leaves and the session keeps running.
@@ -93,6 +97,7 @@ pub fn format_request(request: &Request) -> String {
         Request::Attach(pin) => crate::bootstrap::format_pin(pin).replace("SSJ PIN ", "ATTACH "),
         Request::Status => "STATUS\n".to_owned(),
         Request::Stream => "STREAM\n".to_owned(),
+        Request::Datagrams => "DATAGRAMS\n".to_owned(),
         Request::Kill => "KILL\n".to_owned(),
         Request::Detach => "DETACH\n".to_owned(),
     }
@@ -110,6 +115,7 @@ pub fn parse_request(line: &[u8]) -> Result<Request, ControlError> {
     match line {
         b"STATUS" => Ok(Request::Status),
         b"STREAM" => Ok(Request::Stream),
+        b"DATAGRAMS" => Ok(Request::Datagrams),
         b"KILL" => Ok(Request::Kill),
         b"DETACH" => Ok(Request::Detach),
         _ => {

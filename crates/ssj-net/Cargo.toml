@@ -11,6 +11,7 @@ clap = { workspace = true, features = ["derive", "std"] }
 quinn.workspace = true
 quinn-proto.workspace = true
 rcgen.workspace = true
+ring.workspace = true
 rustls.workspace = true
 serde.workspace = true
 sha2.workspace = true

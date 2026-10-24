@@ -1,5 +1,7 @@
 use ssj_proto::bootstrap::{
-    BootstrapError, Connect, format_connect, format_pin, parse_connect, parse_pin, sanitize,
+    BootstrapError, Connect, format_connect, format_leg, format_pin, format_relay_port,
+    format_relay_secret, parse_connect, parse_leg, parse_pin, parse_relay_port, parse_relay_secret,
+    sanitize,
 };
 use ssj_proto::{SessionId, SessionName};
 
@@ -393,5 +395,70 @@ fn the_socket_is_an_optional_field_after_the_name() {
             Err(BootstrapError::Malformed),
             "{tail:?}"
         );
+    }
+}
+
+#[test]
+fn the_relay_secret_line_has_a_fixed_shape_and_survives_a_round_trip() {
+    let secret: [u8; 32] = core::array::from_fn(|i| (i * 8 + 3) as u8);
+    let line = format_relay_secret(&secret);
+    assert_eq!(line, format!("SSJ RELAY {HEX}\n"));
+    assert_eq!(parse_relay_secret(line.as_bytes()), Ok(secret));
+    assert_eq!(parse_relay_secret(line.trim_end().as_bytes()), Ok(secret));
+    for bad in [
+        "SSJ RELAY \n".to_owned(),
+        format!("SSJ RELAY {}\n", HEX.to_uppercase()),
+        format!("SSJ RELAY {}\n", &HEX[2..]),
+        format!("SSJ RELAY {HEX}00\n"),
+        format!("SSJ PIN {HEX}\n"),
+    ] {
+        assert!(parse_relay_secret(bad.as_bytes()).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn the_relay_port_is_found_after_other_text() {
+    assert_eq!(format_relay_port(60123), "SSJ RELAY-PORT 60123\n");
+    assert_eq!(parse_relay_port(b"SSJ RELAY-PORT 60123\n"), Ok(Some(60123)));
+    assert_eq!(
+        parse_relay_port(b"Welcome\r\nSSJ RELAY-PORT 7\r\nmore"),
+        Ok(Some(7))
+    );
+    // not complete yet, or not there
+    assert_eq!(parse_relay_port(b"SSJ RELAY-PORT 60123"), Ok(None));
+    assert_eq!(parse_relay_port(b"nothing\n"), Ok(None));
+    assert_eq!(parse_relay_port(b""), Ok(None));
+    for bad in [
+        &b"SSJ RELAY-PORT \n"[..],
+        b"SSJ RELAY-PORT 65536\n",
+        b"SSJ RELAY-PORT 007\n",
+        b"SSJ RELAY-PORT -1\n",
+        b"SSJ RELAY-PORT 1 2\n",
+    ] {
+        assert!(parse_relay_port(bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn the_command_of_the_leg_survives_any_words() {
+    let command: Vec<String> = ["ssh", "-o", "A=b c", "--", "me@host", "it's \"x\"\n,"]
+        .map(str::to_owned)
+        .to_vec();
+    let line = format_leg(&command).unwrap();
+    assert!(line.starts_with("SSJ LEG "));
+    assert_eq!(line.matches('\n').count(), 1);
+    assert_eq!(parse_leg(line.as_bytes()), Ok(command));
+    assert_eq!(format_leg(&[]), None);
+    assert_eq!(format_leg(&["x".repeat(10_000)]), None);
+    for bad in [
+        "SSJ LEG \n",
+        "SSJ LEG zz\n",
+        "SSJ LEG 41,\n",
+        "SSJ LEG 4G\n",
+        "SSJ LEG 41 42\n",
+        "SSJ LEG ff\n",
+        "LEG 41\n",
+    ] {
+        assert!(parse_leg(bad.as_bytes()).is_err(), "{bad:?}");
     }
 }

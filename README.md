@@ -140,6 +140,7 @@ The options of a command follow its word: `ssj connect -A user@host`, `ssj list 
 | ---------------------------------------- | ---------------------------------------------------------------- |
 | `user@host:2222`, `ssh://user@host:2222` | Port of the ssh server. |
 | `--transport auto\|udp\|stdio` | `auto` is the default; `stdio` is the `ssh` channel. |
+| `--relay none\|auto\|first` | UDP to the first jump host, which passes it on over `ssh`; `none` is the default. |
 | `--ssh-command 'ssh -J jump'` | Replaces `ssh`. |
 | `--server-path ~/bin/ssj-server` | Server file on the host, when it is not in the default place. |
 | `--udp-host 203.0.113.7` | UDP address, when it differs from the host name. |
@@ -286,6 +287,26 @@ has no history: the shell shows its prompt again, and a full-screen program draw
 - Choose a transport with `--transport` or `transport` in `client.toml`. See the specification
   for the details.
 
+#### UDP through a jump host
+
+When a host is behind a jump host (`ProxyJump`), the stretch that breaks is usually the one from
+your laptop to the first jump host. With `relay`, `ssj` speaks UDP over that stretch and the jump
+host passes the packets on over `ssh`:
+
+```toml
+relay = "auto"      # "none" (the default), "auto", or "first"
+```
+
+- `auto` uses the relay when the first jump host has `ssj-server`, and does nothing otherwise.
+  `first` offers to install the server there (like `auto_install`), and says when it is not used.
+  `--relay` sets it for one connection.
+- The jump host forwards packets and cannot read them: the session keeps its end-to-end
+  certificates, and the pin still comes through the `ssh` to the destination.
+- The login from the jump host to the destination uses the keys of the jump host, or your agent
+  if `ForwardAgent` is on for it. It never asks, so log in once from the jump host to accept the
+  host key.
+- If the relay does not come up, the session runs over the `ssh` channel, as before.
+
 ### Congestion control
 
 `congestion = "auto"` is the default. `ssj` sends like CUBIC, which is fastest on a clean link
@@ -396,6 +417,7 @@ detach_key = "ctrl-\\"                # a key such as "ctrl-]" that detaches any
 ssh_command = "ssh -J jump"           # replaces ssh
 send_env = []                         # more variables to send, besides TERM and the SendEnv of ssh
 transport = "auto"                    # "auto", "udp", or "stdio"
+relay = "none"                        # "none", "auto", or "first": UDP to the first jump host
 auto_attach = false                   # `ssj connect host` joins the only session without a client
 local_echo = "off"                    # "off" or "auto": show typed characters at once
 compress = "off"                      # "off" or "auto": compress while the link is the limit

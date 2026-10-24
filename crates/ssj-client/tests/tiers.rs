@@ -105,6 +105,7 @@ async fn a_stream_that_is_slow_to_open_is_not_given_up_after_the_short_first_tim
             socket: None,
         },
         identity,
+        relay_ready: None,
         tiers: vec![
             Tier::Stream {
                 name: "tcp",

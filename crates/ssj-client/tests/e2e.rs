@@ -2380,3 +2380,100 @@ fn a_command_word_with_help_shows_its_own_help() {
         .contains("--force")
     );
 }
+
+/// A stand-in for `ssh` that is also found under the name `ssh` (the relay runs that name), and
+/// that says a jump host stands in front of every destination but the jump host itself.
+const JUMP_SSH: &str = "#!/bin/sh
+for a in \"$@\"; do
+  if [ \"$a\" = \"-G\" ]; then
+    for dest in \"$@\"; do :; done
+    echo \"hostname 127.0.0.1\"
+    echo \"user tim\"
+    echo \"port 22\"
+    if [ \"$dest\" != \"jumphost\" ]; then echo \"proxyjump jumphost\"; fi
+    exit 0
+  fi
+done
+while [ \"$1\" != \"--\" ]; do shift; done
+shift
+shift
+exec sh -c \"$*\"
+";
+
+/// Runs `ssj connect target -- <command>` behind the jump host of [`JUMP_SSH`], with the relay
+/// setting `relay`.
+fn run_behind_jump(relay: &str, command: &str) -> Output {
+    let dir = fake_ssh("").with_file_name(format!("jump-{}", rand_suffix()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ssh = dir.join("ssh");
+    std::fs::write(&ssh, JUMP_SSH).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let port = free_port();
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let child = Command::new(env!("CARGO_BIN_EXE_ssj"))
+        .env("XDG_CONFIG_HOME", no_config())
+        .env("PATH", path)
+        .arg("connect")
+        .args(["--ssh-command", ssh.to_str().unwrap()])
+        .args(["--server-path", server_binary().to_str().unwrap()])
+        .args(["--port-range", &format!("{port}:{}", port + 10)])
+        .args(["--relay", relay, "-vv"])
+        .args(LEAK_GUARD)
+        .args(["--server-arg", "--shell", "--server-arg", "/bin/sh"])
+        .args(["target", "--", command])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn_locked()
+        .unwrap();
+    let started = Instant::now();
+    let pid = child.id();
+    std::thread::scope(|scope| {
+        let waiting = scope.spawn(move || child.wait_with_output().unwrap());
+        while !waiting.is_finished() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the client did not finish (pid {pid})"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        waiting.join().unwrap()
+    })
+}
+
+#[test]
+fn a_destination_behind_a_jump_host_is_reached_over_udp_through_the_relay() {
+    let output = run_behind_jump("first", "echo through-the-relay; exit 5");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("through-the-relay"),
+        "{stdout:?} {stderr:?}"
+    );
+    assert_eq!(output.status.code(), Some(5), "{stdout:?} {stderr:?}");
+    assert!(
+        stderr.contains("transports in order: relay, stdio"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("connecting over relay"), "{stderr}");
+    assert!(
+        !stderr.contains("next transport"),
+        "the relay must carry the session: {stderr}"
+    );
+}
+
+#[test]
+fn without_the_relay_setting_a_jump_host_leaves_the_ssh_channel() {
+    let output = run_behind_jump("none", "echo plain; exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("plain"), "{stdout:?} {stderr:?}");
+    assert!(stderr.contains("transports in order: stdio"), "{stderr}");
+}

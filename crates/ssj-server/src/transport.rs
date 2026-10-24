@@ -93,7 +93,35 @@ pub async fn serve_observed(
     stream_timeout: Duration,
     observer: Option<mpsc::UnboundedSender<quinn::Connection>>,
 ) {
-    while let Some(incoming) = ssj_net::accept_validated(&endpoint).await {
+    serve_with(endpoint, conns, stream_timeout, observer, true).await;
+}
+
+/// Like [`serve`] for an endpoint whose packets come out of a pipe (behind a relay): nobody can
+/// forge a source address there, so the retry that validates one only costs a round trip.
+pub async fn serve_piped(
+    endpoint: quinn::Endpoint,
+    conns: mpsc::Sender<Connection>,
+    stream_timeout: Duration,
+) {
+    serve_with(endpoint, conns, stream_timeout, None, false).await;
+}
+
+async fn serve_with(
+    endpoint: quinn::Endpoint,
+    conns: mpsc::Sender<Connection>,
+    stream_timeout: Duration,
+    observer: Option<mpsc::UnboundedSender<quinn::Connection>>,
+    validate: bool,
+) {
+    loop {
+        let incoming = if validate {
+            ssj_net::accept_validated(&endpoint).await
+        } else {
+            endpoint.accept().await
+        };
+        let Some(incoming) = incoming else {
+            break;
+        };
         let to_session = conns.clone();
         let observer = observer.clone();
         tokio::spawn(async move {

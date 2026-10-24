@@ -67,6 +67,15 @@ pub struct SshConfig {
     pub hostname: Option<String>,
     /// A jump host or a proxy command is in the way. UDP does not travel through one.
     pub jump: bool,
+    /// The jump hosts of `ProxyJump` in order, as written. Empty for none and for a proxy command.
+    pub proxy_jump: Vec<String>,
+    /// A `ProxyCommand` is in the way, which cannot be followed.
+    pub proxy_command: bool,
+    /// The user and the port that `ssh` would use for the destination.
+    pub user: Option<String>,
+    pub port: Option<u16>,
+    /// `ForwardAgent yes`: `ssh` offers the agent to the host.
+    pub forward_agent: bool,
     /// The patterns of `SendEnv`: `ssh` sends these variables to the host, and `ssj` sends them as
     /// well. A pattern that `ssj` would not take is left out.
     pub send_env: Vec<String>,
@@ -85,9 +94,24 @@ pub fn parse_ssh_config(config: &str) -> SshConfig {
             "hostname" if out.hostname.is_none() && !value.is_empty() => {
                 out.hostname = Some(value.to_owned());
             }
-            "proxyjump" | "proxycommand" if !value.is_empty() && value != "none" => {
+            "proxyjump" if !value.is_empty() && value != "none" => {
                 out.jump = true;
+                out.proxy_jump = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|hop| !hop.is_empty())
+                    .map(str::to_owned)
+                    .collect();
             }
+            "proxycommand" if !value.is_empty() && value != "none" => {
+                out.jump = true;
+                out.proxy_command = true;
+            }
+            "user" if out.user.is_none() && !value.is_empty() => {
+                out.user = Some(value.to_owned());
+            }
+            "port" if out.port.is_none() => out.port = value.parse().ok(),
+            "forwardagent" => out.forward_agent = value == "yes",
             "sendenv" if ssj_proto::EnvFilter::new(vec![value.to_owned()]).is_ok() => {
                 out.send_env.push(value.to_owned());
             }
@@ -104,11 +128,20 @@ pub fn jump_in_config(config: &str) -> bool {
 
 /// Asks `ssh -G` about the destination, once for the whole connection. `None` if `ssh` cannot say.
 pub async fn ssh_config(args: &Args) -> Option<SshConfig> {
+    ssh_config_of(args, &args.destination, &args.ssh_port_args()).await
+}
+
+/// Like [`ssh_config`] for another destination, such as a jump host, with its own port options.
+pub async fn ssh_config_of(
+    args: &Args,
+    destination: &str,
+    port_args: &[String],
+) -> Option<SshConfig> {
     let mut ssh = Command::new(&args.ssh_command[0]);
     ssh.args(&args.ssh_command[1..])
-        .args(args.ssh_port_args())
+        .args(port_args)
         .args(["-G", "--"])
-        .arg(&args.destination)
+        .arg(destination)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

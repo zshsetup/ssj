@@ -31,6 +31,7 @@ fn requests_have_a_fixed_shape_and_survive_a_round_trip() {
     assert_eq!(format_request(&Request::Kill), "KILL\n");
     assert_eq!(format_request(&Request::Detach), "DETACH\n");
     assert_eq!(format_request(&Request::Stream), "STREAM\n");
+    assert_eq!(format_request(&Request::Datagrams), "DATAGRAMS\n");
     assert_eq!(
         format_request(&Request::Attach(fingerprint())),
         format!("ATTACH {HEX}\n")
@@ -38,6 +39,7 @@ fn requests_have_a_fixed_shape_and_survive_a_round_trip() {
     for request in [
         Request::Status,
         Request::Stream,
+        Request::Datagrams,
         Request::Kill,
         Request::Detach,
         Request::Attach(fingerprint()),
@@ -63,6 +65,8 @@ fn malformed_requests_are_refused() {
         "STATUS extra\n".into(),
         "KILL 1\n".into(),
         "STREAM 1\n".into(),
+        "DATAGRAMS 1\n".into(),
+        "datagrams\n".into(),
         "stream\n".into(),
         "ATTACH\n".into(),
         "ATTACH \n".into(),

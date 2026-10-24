@@ -44,6 +44,10 @@ pub enum Mode {
     /// Carry the stream of a client over stdin and stdout, for hosts that allow only the `ssh`
     /// channel.
     Stdio(Option<String>),
+    /// Carry the QUIC packets of a client behind a relay over stdin and stdout.
+    Datagrams(Option<String>),
+    /// Forward the QUIC packets of a client to a server behind this host.
+    Relay,
 }
 
 /// Container for the parsed command line of `ssj-server`.
@@ -133,6 +137,12 @@ struct Options {
     /// Carry the stream of a client over stdin and stdout
     #[arg(long, value_name = "ID", num_args = 0..=1, value_parser = selector, group = "mode")]
     stdio: Option<Option<String>>,
+    /// Carry the QUIC packets of a client behind a relay over stdin and stdout
+    #[arg(long, hide = true, value_name = "ID", num_args = 0..=1, value_parser = selector, group = "mode")]
+    datagrams: Option<Option<String>>,
+    /// Forward the QUIC packets of a client to a server behind this host (see `ssj-net`'s `relay`)
+    #[arg(long, hide = true, group = "mode")]
+    relay: bool,
     /// Print the running sessions
     #[arg(long, group = "mode")]
     list: bool,
@@ -206,6 +216,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         Mode::Detach(ids)
     } else if let Some(id) = options.stdio {
         Mode::Stdio(id)
+    } else if let Some(id) = options.datagrams {
+        Mode::Datagrams(id)
+    } else if options.relay {
+        Mode::Relay
     } else if options.list {
         Mode::List
     } else if options.version {

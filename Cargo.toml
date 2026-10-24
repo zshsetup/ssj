@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Session survives jumps: a roaming remote shell over QUIC"
 repository = "https://github.com/zshsetup/ssj"
@@ -26,6 +26,7 @@ quinn = { version = "0.11.12", default-features = false, features = ["runtime-to
 # for the type of the round-trip estimate that a congestion controller is given
 quinn-proto = { version = "0.11.19", default-features = false }
 rcgen = "0.14.10"
+ring = { version = "0.17.14", default-features = false }
 rustix = "1.1.5"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -33,11 +34,11 @@ serde_bytes = "0.11.19"
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 socket2 = "0.6.5"
-ssj-client = { path = "crates/ssj-client", version = "0.2.0" }
-ssj-config = { path = "crates/ssj-config", version = "0.2.0" }
-ssj-net = { path = "crates/ssj-net", version = "0.2.0" }
-ssj-proto = { path = "crates/ssj-proto", version = "0.2.0" }
-ssj-server = { path = "crates/ssj-server", version = "0.2.0" }
+ssj-client = { path = "crates/ssj-client", version = "0.2.1" }
+ssj-config = { path = "crates/ssj-config", version = "0.2.1" }
+ssj-net = { path = "crates/ssj-net", version = "0.2.1" }
+ssj-proto = { path = "crates/ssj-proto", version = "0.2.1" }
+ssj-server = { path = "crates/ssj-server", version = "0.2.1" }
 system-configuration = "0.8.0"
 tempfile = "3.27.0"
 tokio = "1.53.3"

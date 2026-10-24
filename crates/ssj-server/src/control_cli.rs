@@ -224,7 +224,11 @@ pub fn run(args: &Args) -> ExitCode {
             Err(message) => fail(&message),
             Ok(found) => stdio(&found.path),
         },
-        Mode::Serve | Mode::Version | Mode::CheckConfig | Mode::ConfigTemplate => {
+        Mode::Datagrams(id) => match choose(sessions, id.as_deref()) {
+            Err(message) => fail(&message),
+            Ok(found) => carry(&found.path, &Request::Datagrams),
+        },
+        Mode::Serve | Mode::Relay | Mode::Version | Mode::CheckConfig | Mode::ConfigTemplate => {
             unreachable!("handled by the caller")
         }
     }
@@ -235,6 +239,11 @@ const STDIO_DRAIN: Duration = Duration::from_secs(2);
 
 /// Joins stdin and stdout to the session: the control socket turns into the byte stream.
 pub(crate) fn stdio(path: &std::path::Path) -> ExitCode {
+    carry(path, &Request::Stream)
+}
+
+/// Like [`stdio`] for any request that turns the control socket into a stream.
+fn carry(path: &std::path::Path, request: &Request) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -242,14 +251,14 @@ pub(crate) fn stdio(path: &std::path::Path) -> ExitCode {
         Ok(runtime) => runtime,
         Err(err) => return fail(&format!("cannot start the runtime: {err}")),
     };
-    let code = runtime.block_on(stdio_session(path));
+    let code = runtime.block_on(stdio_session(path, request));
     // the read of stdin runs on a thread that does not return on a terminal or a pipe that stays
     // open, so waiting for the runtime would hang.
     runtime.shutdown_background();
     code
 }
 
-async fn stdio_session(path: &std::path::Path) -> ExitCode {
+async fn stdio_session(path: &std::path::Path, request: &Request) -> ExitCode {
     use ssj_proto::bootstrap::SYNC_HEADER;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, copy};
     use tokio::net::UnixStream;
@@ -260,7 +269,7 @@ async fn stdio_session(path: &std::path::Path) -> ExitCode {
     };
     let (read, mut write) = stream.into_split();
     if write
-        .write_all(ssj_proto::control::format_request(&Request::Stream).as_bytes())
+        .write_all(ssj_proto::control::format_request(request).as_bytes())
         .await
         .is_err()
     {

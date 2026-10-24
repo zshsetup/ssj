@@ -238,10 +238,60 @@ QUIC beside it, so a network where UDP works again is found without a delay and 
 does not costs nothing. A change of the network while the session is on a stream also tries QUIC
 (1.5 seconds) on the new path, without touching the working connection; if it opens, the client
 resumes over it and drops the stream (`Pumped::Switch`). Auto leaves out UDP when `ssh -G` shows a
-`proxyjump` or `proxycommand` for the host. After a connection was made, its transport is kept
+`proxyjump` or `proxycommand` for the host, unless a relay is used (below). After a connection was made, its transport is kept
 for three failed attempts before the next partner is tried, since the network is the likelier
 culprit. The server offers what it is told to
 (`--no-udp`); the `ssh` channel is always there.
+
+### UDP through a jump host (`relay`)
+
+A host behind a jump host cannot be reached by datagrams, but the path that is usually flaky is
+the one from the client to the first jump host. With `relay = "auto"` or `"first"` (the default is
+`none`) and a `proxyjump` in `ssh -G`, the client speaks UDP to the first jump host, which passes
+the packets to the server over `ssh`. The QUIC connection stays between the client and the
+server, with the pinned certificates of the direct case, so the jump host sees ciphertext only
+and can drop packets, not read or change them. Hosts after the first jump host stay on `ssh`
+(`ssh -J rest host`); a first jump host behind a jump host of its own gets no relay, and a
+`proxycommand` cannot be followed.
+
+1. **The relay on the jump host.** Beside the connection to the destination, the client runs
+   `ssj-server --relay` on the first jump host through `ssh` (`BatchMode`, so it never asks), and
+   writes `SSJ RELAY <64 hex digits>`: a secret of 32 random bytes. The server binds a UDP port
+   from its `port_range` and answers `SSJ RELAY-PORT <n>`. The process behind the `ssh` stays as a
+   daemon when `ssh` ends, like a session.
+1. **The leg to the destination.** Once the client has the session from the destination, it
+   writes `SSJ LEG <hex>[,<hex>...]` to the relay: the words of a command, each in hex, that the
+   relay runs without a shell. The command is `ssh [-A] [-J rest] [-p port] -- user@host <server> --datagrams <session>`. `--datagrams` sends `DATAGRAMS` on the control socket and
+   after `OK` the socket carries QUIC packets as frames (two bytes of length, the packet), after
+   the sync header of `--stdio`. The relay answers `OK` when the sync header has come, or
+   `ERR <reason>` with the error output of the command. The client tries the relay tier without
+   waiting for the answer: its first packets wait in the socket of the relay.
+1. **The endpoint on the destination.** `DATAGRAMS` opens a second QUIC endpoint on the frames,
+   with the certificate and the client pin of the last `ATTACH`, so the fingerprint that the
+   client holds (it came through the end-to-end `ssh`, never through the jump host) is the right
+   one. Datagrams that do not fit are dropped, as a network drops them. The endpoint closes when
+   the stream ends, and the address validation (`Retry`) is skipped, since nobody can forge an
+   address in a pipe.
+1. **The envelope.** Between the client and the relay each datagram has a counter (8 bytes) and
+   a tag (16 bytes, HMAC-SHA256 over the direction, the counter and the packet, with the secret).
+   The relay forwards only packets with a valid tag whose counter was not used (a window of 64
+   behind the newest), and answers to the address of the newest. A client that comes from
+   another address (a new network) is followed, and a recorded packet cannot send the answers
+   elsewhere. QUIC keeps the 1200-byte packets it starts with (no path MTU search), so the
+   envelope stays below the smallest MTU.
+1. **Lifetime.** The relay ends when the leg ends (the session ended, or `ssh` died) or when
+   it has heard nothing from the client for 8 hours. After that the client finds the port closed
+   and the `ssh` channel carries the session as without a relay. The relay tier is first in the
+   list, the `ssh` channel behind it, so a relay that does not come up costs the time of the first
+   attempt and not the session.
+
+The leg uses the configuration of `ssh` on the jump host, and an agent only if `ForwardAgent` is
+set for the jump host or the destination: the jump host is trusted with the login to the
+destination as it is with `ProxyJump`, but never with the session. `relay = "first"` asks to
+install the server on the jump host when it is missing (`auto_install`), and says if the relay is
+not used; `auto` skips without a word (`-v` says why). The checks of the host key of the destination
+are those of the jump host: with `BatchMode` an unknown key fails (log in once from the jump host),
+and the failure is shown.
 
 A stream has no keepalive of QUIC: if the path dies without a sign (a firewall, a hung `ssh`),
 the connection stays open. The client pings every second, shows "no response" after 2 seconds,

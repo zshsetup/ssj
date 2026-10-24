@@ -4,14 +4,16 @@ use std::io;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
+use ssj_net::relay::StreamSocket;
 use ssj_net::{Identity, SERVER_SEND_WINDOW, quic_server_with_send_window, server_tls};
 use ssj_proto::SessionId;
 use ssj_proto::bootstrap::Connect;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 use crate::listen::{bind_in_range, endpoint_on};
 use crate::session::Connection;
-use crate::transport::serve;
+use crate::transport::{serve, serve_piped};
 
 /// Manages the current endpoint: at most one, bound to a fresh port with fresh certificates.
 pub struct Frontend {
@@ -22,6 +24,11 @@ pub struct Frontend {
     stream_timeout: Duration,
     send_window: u64,
     current: Option<quinn::Endpoint>,
+    /// The certificate and the pin of the last [`Frontend::open`], which an endpoint behind a
+    /// relay uses as well: the client holds the fingerprint that `open` returned.
+    last: Option<(Identity, [u8; 32])>,
+    /// The endpoint on the packets of a relay, while its stream lives.
+    piped: Option<quinn::Endpoint>,
 }
 
 impl Frontend {
@@ -39,6 +46,8 @@ impl Frontend {
             stream_timeout,
             send_window: SERVER_SEND_WINDOW,
             current: None,
+            last: None,
+            piped: None,
         }
     }
 
@@ -64,7 +73,11 @@ impl Frontend {
             old.close(0u8.into(), b"replaced");
             let _ = tokio::time::timeout(Duration::from_secs(3), old.wait_idle()).await;
         }
+        if let Some(old) = self.piped.take() {
+            old.close(0u8.into(), b"replaced");
+        }
         let identity = Identity::generate();
+        self.last = Some((identity.duplicate(), pin));
         let mut udp = None;
         if self.udp {
             let mut tries = 0;
@@ -102,6 +115,49 @@ impl Frontend {
         })
     }
 
+    /// Whether [`Frontend::open_piped`] has a certificate to use.
+    pub fn can_open_piped(&self) -> bool {
+        self.last.is_some()
+    }
+
+    /// Opens an endpoint on `stream`, which carries the QUIC packets of a client behind a relay,
+    /// one frame each. It accepts the client of the last [`Frontend::open`] and no other, and
+    /// closes with the stream. Must run inside the tokio runtime.
+    pub fn open_piped<S>(&mut self, stream: S) -> io::Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
+        let Some((identity, pin)) = &self.last else {
+            return Err(io::Error::other("no client was attached"));
+        };
+        if let Some(old) = self.piped.take() {
+            old.close(0u8.into(), b"replaced");
+        }
+        let (reader, writer) = tokio::io::split(stream);
+        let socket = StreamSocket::new(reader, writer);
+        let endpoint = quinn::Endpoint::new_with_abstract_socket(
+            quinn::EndpointConfig::default(),
+            Some(quic_server_with_send_window(
+                server_tls(identity, *pin),
+                self.send_window,
+            )),
+            socket.clone(),
+            std::sync::Arc::new(quinn::TokioRuntime),
+        )?;
+        tokio::spawn(serve_piped(
+            endpoint.clone(),
+            self.conns.clone(),
+            self.stream_timeout,
+        ));
+        let watched = endpoint.clone();
+        tokio::spawn(async move {
+            socket.ended().await;
+            watched.close(0u8.into(), b"relay ended");
+        });
+        self.piped = Some(endpoint);
+        Ok(())
+    }
+
     /// The channel to the session, for streams that do not come from a listener.
     pub fn conns(&self) -> mpsc::Sender<Connection> {
         self.conns.clone()
@@ -111,6 +167,9 @@ impl Frontend {
     /// process ends. Without it the client of a finished session waits for an answer that never
     /// comes.
     pub async fn close_and_flush(&mut self) {
+        if let Some(endpoint) = self.piped.take() {
+            endpoint.close(0u8.into(), b"closed");
+        }
         if let Some(endpoint) = self.current.take() {
             endpoint.close(0u8.into(), b"closed");
             let _ = tokio::time::timeout(Duration::from_secs(1), endpoint.wait_idle()).await;
@@ -119,6 +178,9 @@ impl Frontend {
 
     /// Stops listening. Nobody can connect until the next [`Frontend::open`].
     pub fn close(&mut self) {
+        if let Some(endpoint) = self.piped.take() {
+            endpoint.close(0u8.into(), b"closed");
+        }
         if let Some(endpoint) = self.current.take() {
             endpoint.close(0u8.into(), b"closed");
         }

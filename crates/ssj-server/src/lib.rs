@@ -10,6 +10,7 @@ pub mod daemon;
 pub mod frontend;
 pub mod launch;
 pub mod listen;
+pub mod relay;
 pub mod session;
 pub mod stream;
 pub mod transport;

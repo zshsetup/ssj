@@ -212,6 +212,95 @@ fn parse_fingerprint(text: &[u8]) -> Result<[u8; 32], BootstrapError> {
         .map_err(|_| BootstrapError::Malformed)
 }
 
+/// Start of the line that asks `ssj-server --relay` for a relay: the secret that the client and the
+/// relay share (see `ssj_net::relay`).
+pub const RELAY_PREFIX: &str = "SSJ RELAY ";
+/// Start of the line with which the relay says its UDP port.
+pub const RELAY_PORT_PREFIX: &str = "SSJ RELAY-PORT ";
+/// Start of the line that tells the relay the command that reaches the server behind it, as hex
+/// words separated by commas. The relay answers `OK` once the command carries packets, or `ERR`.
+pub const LEG_PREFIX: &str = "SSJ LEG ";
+/// Longest `SSJ LEG` line the relay reads.
+pub const MAX_LEG_LINE: usize = 16 * 1024;
+
+/// Formats the line `SSJ RELAY <64 hex digits>`, including the newline.
+pub fn format_relay_secret(secret: &[u8; 32]) -> String {
+    format!("{RELAY_PREFIX}{}\n", hex::encode(secret))
+}
+
+/// Parses the line of [`format_relay_secret`].
+pub fn parse_relay_secret(line: &[u8]) -> Result<[u8; 32], BootstrapError> {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let hex = line
+        .strip_prefix(RELAY_PREFIX.as_bytes())
+        .ok_or(BootstrapError::Malformed)?;
+    parse_fingerprint(hex)
+}
+
+/// Formats the line `SSJ RELAY-PORT <port>`, including the newline.
+pub fn format_relay_port(port: u16) -> String {
+    format!("{RELAY_PORT_PREFIX}{port}\n")
+}
+
+/// Finds the line of [`format_relay_port`] in the output of the relay, which may have text before
+/// it. A line without its newline is not complete yet.
+pub fn parse_relay_port(output: &[u8]) -> Result<Option<u16>, BootstrapError> {
+    let Some(end) = output.iter().rposition(|b| *b == b'\n') else {
+        return Ok(None);
+    };
+    let Some(line) = output[..end]
+        .split(|b| *b == b'\n')
+        .find(|line| line.starts_with(RELAY_PORT_PREFIX.as_bytes()))
+    else {
+        return Ok(None);
+    };
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let digits = &line[RELAY_PORT_PREFIX.len()..];
+    let plain = !digits.is_empty()
+        && digits.len() <= 5
+        && digits.iter().all(u8::is_ascii_digit)
+        && (digits == b"0" || digits[0] != b'0');
+    if !plain {
+        return Err(BootstrapError::Malformed);
+    }
+    std::str::from_utf8(digits)
+        .ok()
+        .and_then(|text| text.parse().ok())
+        .map(Some)
+        .ok_or(BootstrapError::Malformed)
+}
+
+/// Formats the line `SSJ LEG <hex>[,<hex>...]` for a command, or `None` if there is no word, a word
+/// is empty, or the line would be longer than [`MAX_LEG_LINE`].
+pub fn format_leg(command: &[String]) -> Option<String> {
+    if command.is_empty() || command.iter().any(String::is_empty) {
+        return None;
+    }
+    let words: Vec<String> = command.iter().map(hex::encode).collect();
+    let line = format!("{LEG_PREFIX}{}\n", words.join(","));
+    (line.len() <= MAX_LEG_LINE).then_some(line)
+}
+
+/// Parses the line of [`format_leg`] into the words of the command.
+pub fn parse_leg(line: &[u8]) -> Result<Vec<String>, BootstrapError> {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let words = line
+        .strip_prefix(LEG_PREFIX.as_bytes())
+        .ok_or(BootstrapError::Malformed)?;
+    words
+        .split(|b| *b == b',')
+        .map(|word| {
+            let bytes = parse_hex(word)?;
+            String::from_utf8(bytes)
+                .ok()
+                .filter(|text| !text.is_empty())
+                .ok_or(BootstrapError::Malformed)
+        })
+        .collect()
+}
+
 /// Makes remote text safe to show on a terminal.
 ///
 /// Control characters (including escape sequences) and bidirectional formatting characters are

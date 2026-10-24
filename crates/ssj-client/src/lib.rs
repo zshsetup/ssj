@@ -12,6 +12,7 @@ pub mod install;
 pub mod log;
 pub mod netwatch;
 pub mod options;
+pub mod relay;
 pub mod run;
 pub mod sessions_cache;
 pub mod status;

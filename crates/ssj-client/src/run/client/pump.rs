@@ -15,8 +15,8 @@ use super::{Client, Link, Pumped, Upgrade, exit_code, next_cause, redraw};
 use crate::agent::Forward;
 use crate::debounce::Debounce;
 use crate::netwatch::Cause;
+use crate::run::Finished;
 use crate::run::wire::server_frame_name;
-use crate::run::{Finished, Tier};
 use crate::vlog;
 
 /// How long after the last debug line on the terminal the screen is drawn again.
@@ -111,6 +111,7 @@ impl Client {
             let resize_due = pump.resizes.due();
             let change_at = pump.change.map(|(_, at)| at);
             let (probe, redraw_at) = (pump.probe, pump.redraw_at);
+            let relay_ready = self.params.relay_ready.clone();
             let done = tokio::select! {
                 read = self.io.input.read(&mut self.chunk[..room]), if self.stdin_open && room > 0 => {
                     self.on_typed(read, link).await?
@@ -147,6 +148,10 @@ impl Client {
                 }
                 result = async { pump.upgrade.as_mut().expect("guarded").await }, if pump.upgrade.is_some() => {
                     self.on_upgrade(result, &mut pump)
+                }
+                () = async { relay_ready.as_ref().expect("guarded").notified().await }, if relay_ready.is_some() && self.current != 0 => {
+                    self.on_relay_ready(&mut pump);
+                    None
                 }
                 Some(joined) = pump.spares.join_next(), if !pump.spares.is_empty() => {
                     self.on_spare(joined, link, &mut pump)
@@ -371,10 +376,7 @@ impl Client {
         pump.notices = 0;
         self.rebind();
         // a faster network may have appeared: QUIC is tried on it while the stream works.
-        if self.current != 0
-            && pump.upgrade.is_none()
-            && matches!(self.params.tiers[0], Tier::Udp { .. })
-        {
+        if self.current != 0 && pump.upgrade.is_none() && self.params.tiers[0].is_quic() {
             vlog!(1, "trying QUIC on the new network");
             let attempt = self.prepare_link(0);
             pump.upgrade = Some(Box::pin(timeout(UPGRADE_TIMEOUT, attempt)));
@@ -389,12 +391,21 @@ impl Client {
         pump.probe = Some(tokio::time::Instant::now() + wait);
     }
 
+    /// Tries QUIC through the relay, which came up after the session began on a stream.
+    fn on_relay_ready(&mut self, pump: &mut Pump) {
+        if pump.upgrade.is_none() && self.params.tiers[0].is_quic() {
+            vlog!(1, "the relay is up: trying QUIC through it");
+            let attempt = self.prepare_link(0);
+            pump.upgrade = Some(Box::pin(timeout(UPGRADE_TIMEOUT, attempt)));
+        }
+    }
+
     /// Moves to QUIC if it opened on the new network.
     fn on_upgrade(&mut self, result: Spare, pump: &mut Pump) -> Option<Pumped> {
         pump.upgrade = None;
         match result {
             Ok(Ok(better)) => {
-                vlog!(1, "QUIC works on the new network");
+                vlog!(1, "QUIC works: moving the session to it");
                 return Some(Pumped::Switch(better, 0));
             }
             Ok(Err(error)) => vlog!(1, "QUIC does not work on the new network: {error}"),

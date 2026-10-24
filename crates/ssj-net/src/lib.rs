@@ -2,6 +2,7 @@
 
 pub mod adaptive;
 pub mod channels;
+pub mod relay;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -49,6 +50,14 @@ impl Identity {
 
     pub fn fingerprint(&self) -> Fingerprint {
         fingerprint(&self.cert)
+    }
+
+    /// A second handle on the same certificate and key.
+    pub fn duplicate(&self) -> Self {
+        Self {
+            cert: self.cert.clone(),
+            key: self.key.clone_key(),
+        }
     }
 
     pub fn private_key(&self) -> PrivateKeyDer<'static> {

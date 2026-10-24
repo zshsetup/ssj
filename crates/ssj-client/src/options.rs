@@ -7,7 +7,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
 use ssj_net::{Compress, Congestion};
 use ssj_proto::SessionName;
 
-use crate::cli::{LocalEcho, Transport, parse_detach_key};
+use crate::cli::{LocalEcho, Relay, Transport, parse_detach_key};
 
 /// A control byte, or `None` for no key.
 type Key = Option<u8>;
@@ -213,7 +213,7 @@ pub struct Server {
 /// Container for where the server file comes from when it is installed.
 #[derive(Args, Debug)]
 pub struct Upload {
-    /// Where the release files are, such as https://host/owner/ssj/releases/download/v0.2.0
+    /// Where the release files are, such as https://host/owner/ssj/releases/download/v0.2.1
     #[arg(long, value_name = "URL")]
     pub download_url: Option<String>,
 
@@ -232,6 +232,10 @@ pub struct Session {
     /// How to reach the server
     #[arg(long, value_name = "WAY")]
     pub transport: Option<Transport>,
+
+    /// Whether UDP goes to the first jump host, which passes it on over ssh (default: none)
+    #[arg(long, value_name = "WAY")]
+    pub relay: Option<Relay>,
 
     /// Show typed characters before the server echoes them
     #[arg(long, value_name = "WHEN")]

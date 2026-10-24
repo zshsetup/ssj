@@ -468,6 +468,7 @@ fn start_client_inner(
     };
     let params = Params {
         identity,
+        relay_ready: None,
         connect: Connect {
             id: ssj_proto::SessionId::parse("abcdef012345").unwrap(),
             udp: Some(server.addr.port()),
