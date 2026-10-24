@@ -20,7 +20,7 @@
 #   CLIENT=host                   run the client on this machine and not in a container: the Mac or
 #                                 Linux machine you sit at, with its own TCP stack, against the
 #                                 server container behind a published port. UDP cannot reach the
-#                                 container, so use --only ssh,tcp,stdio. The link (NETEM) then
+#                                 container, so use --only ssh,stdio. The link (NETEM) then
 #                                 delays only what the server sends, so leave it empty.
 #   TARGET_VOLUME=ssj-target-musl the docker volume with release/ssj-server (and release/ssj for
 #                                 the container client); another one holds another build
@@ -38,10 +38,18 @@
 #   UDPSTAT=1                     print the UDP counters of the client container before and after
 #                                 (RcvbufErrors counts datagrams that a full socket buffer dropped)
 #   TRACE=1                       print the socket options that sshd sets (TCP_NODELAY and such)
+#   EXTRA="mosh et tssh"          also install these tools in both containers (bench/install-extras.sh)
+#                                 so that bench.py measures them next to ssh and ssj. Without it the
+#                                 containers have only ssh, and bench.py skips the other clients.
 #
-# Examples: NETEM=train bench/docker-bench.sh --train --outages 5,15 --only ssh,udp,tcp,stdio
+# Roaming (a change of the address of the client container, which needs this script):
+#   bench/docker-bench.sh --roam --only ssh,udp,stdio,mosh,et,tssh
+# The client container runs with net.ipv4.conf.all.promote_secondaries=1, so that removing its first
+# address leaves the second.
+#
+# Examples: NETEM=train bench/docker-bench.sh --train --outages 5,15 --only ssh,udp,stdio
 #           bench/docker-bench.sh --raw-bulk --bulk-mb 64 --samples 100
-#           NETEM="delay 20ms" bench/docker-bench.sh --only ssh,udp,tcp --json
+#           NETEM="delay 20ms" bench/docker-bench.sh --only ssh,udp,stdio --json
 set -e
 cd "$(dirname "$0")/.."
 IMAGE=${IMAGE:-ubuntu:24.04}
@@ -59,6 +67,7 @@ server_args=
 [ -n "$CPUS" ] && cpu_args="--cpus $CPUS"
 CLIENT_LOG=${CLIENT_LOG:-0}
 PROBE=${PROBE:-0}
+EXTRA=${EXTRA:-}
 CLIENT=${CLIENT:-container}
 TARGET_VOLUME=${TARGET_VOLUME:-ssj-target-musl}
 CLIENT_BIN=${CLIENT_BIN:-target/release/ssj}
@@ -105,8 +114,9 @@ publish=
 [ "$CLIENT" = host ] && publish='-p 127.0.0.1::22'
 # shellcheck disable=SC2086
 docker run -d --name "$name-server" $cpu_args $server_args $publish --network "$name" --hostname server --cap-add NET_ADMIN --cap-add SYS_PTRACE -v "$PWD":/src:ro \
-    -e NETEM="$NETEM" -v "$TARGET_VOLUME":/target:ro -v "$keys/id.pub":/id.pub:ro "$IMAGE" sh -c "
+    -e NETEM="$NETEM" -e EXTRA="$EXTRA" -v "$TARGET_VOLUME":/target:ro -v "$keys/id.pub":/id.pub:ro "$IMAGE" sh -c "
 $install
+sh /src/bench/install-extras.sh server
 mkdir -p /run/sshd /root/.ssh
 ssh-keygen -A >/dev/null
 cat /id.pub > /root/.ssh/authorized_keys
@@ -141,9 +151,11 @@ CONFIG
 fi
 
 # shellcheck disable=SC2086
-docker run --rm $cpu_args --network "$name" --cap-add NET_ADMIN -e NETEM="$NETEM" \
+docker run --rm $cpu_args --network "$name" --cap-add NET_ADMIN -e NETEM="$NETEM" -e EXTRA="$EXTRA" \
+    --sysctl net.ipv4.conf.all.promote_secondaries=1 \
     -v "$PWD":/src:ro -v "$PWD/target":/out -v "$TARGET_VOLUME":/target:ro -v "$keys/id":/id:ro "$IMAGE" sh -c "
 $install
+sh /src/bench/install-extras.sh
 mkdir -p /root/.ssh
 cp /id /root/.ssh/id_ed25519 && chmod 600 /root/.ssh/id_ed25519
 printf 'Host server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n' > /root/.ssh/config
@@ -166,7 +178,8 @@ ssj=/target/release/ssj
 udpstat() { if [ \"$UDPSTAT\" = 1 ]; then echo \"\$1: \$(grep -E '^Udp:' /proc/net/snmp | tail -1 | tr '\\n' ' ')\"; fi; }
 udpstat before
 if [ \"$CLIENT_LOG\" = 1 ]; then
-    printf '#!/bin/sh\nexec /target/release/ssj -vvv --log-file /tmp/ssj-log.\$\$ \"\$@\"\n' > /usr/local/bin/ssj-log
+    # the options of ssj follow its command word
+    printf '#!/bin/sh\ncmd=\$1; shift\nexec /target/release/ssj \"\$cmd\" -vvv --log-file /tmp/ssj-log.\$\$ \"\$@\"\n' > /usr/local/bin/ssj-log
     chmod +x /usr/local/bin/ssj-log
     ssj=/usr/local/bin/ssj-log
 fi

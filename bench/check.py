@@ -9,9 +9,8 @@ Usage:
 The limits are wide, since a machine in the cloud is noisy: they catch a change that breaks
 something and not one that costs a few percent.
 
-- on the clean link: ssj over UDP answers a keystroke within 5 ms (median), over TCP and the
-  ssh channel within 10 ms, and at most 1 percent of the echoes stall (see SPEC.md, "Small
-  packets on the TCP transport");
+- on the clean link: ssj over UDP answers a keystroke within 5 ms (median), over the ssh channel
+  within 10 ms, and at most 1 percent of the echoes stall (see SPEC.md, "Small packets");
 - on the lossy link: ssj over UDP moves bulk output at least 3 times as fast as ssh does.
 
 Exit code 1 if a limit is broken.
@@ -60,7 +59,7 @@ def main() -> None:
     print(table("Clean link", clean))
     print(table("Lossy link", lossy))
     broken = []
-    for name, limit in (("udp", 5), ("tcp", 10), ("stdio", 10)):
+    for name, limit in (("udp", 5), ("stdio", 10)):
         lat = clean[name]["latency"]
         if lat["median_ms"] > limit:
             broken.append(
