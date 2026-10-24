@@ -1616,6 +1616,23 @@ async fn a_prestarted_shell_runs_before_the_client_and_the_first_start_joins_it(
 }
 
 #[tokio::test]
+async fn a_prestarted_shell_that_writes_more_than_the_buffer_waits_for_the_first_start() {
+    let mut cfg = prestarted("head -c 300000 /dev/zero | tr '\\0' a; echo done-writing; sleep 5");
+    cfg.replay_capacity = 16 * 1024;
+    cfg.slow_client = ssj_server::session::SlowClient::Drop;
+    let harness = start(cfg);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut client = harness.connect().await;
+    // nothing was forgotten, so the first start still joins
+    let welcome = client.start().await;
+    assert_eq!((welcome.input_offset, welcome.output_offset), (0, 0));
+    let seen = client
+        .read_until(|s| contains(&s.output, "done-writing"))
+        .await;
+    assert!(seen.error.is_none());
+}
+
+#[tokio::test]
 async fn joining_a_prestarted_shell_applies_the_size_of_the_hello() {
     let harness = start(prestarted("read x; stty size; sleep 5"));
     let mut client = harness.connect().await;

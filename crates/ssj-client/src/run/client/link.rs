@@ -244,7 +244,9 @@ impl Client {
             return self.prepare_link(idx).await.map(|link| (link, idx));
         }
         let (primary, secondary) = (0, self.current.max(1));
-        let stagger = if self.current > 0 {
+        // a relay cannot be up before the session is: the stream has no reason to wait for it
+        let relay_first = !self.linked_once && matches!(self.params.tiers[0], Tier::Relay { .. });
+        let stagger = if self.current > 0 || relay_first {
             Duration::ZERO
         } else {
             RACE_STAGGER

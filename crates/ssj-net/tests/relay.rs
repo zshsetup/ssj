@@ -165,3 +165,47 @@ async fn the_stream_socket_reports_the_end_of_its_stream() {
         .await
         .expect("the end of the stream is noticed");
 }
+
+/// Prints how fast the server can send through the relay. Run it with `--release --ignored
+/// --nocapture`.
+#[tokio::test]
+#[ignore = "a measurement"]
+async fn measure_the_speed_of_the_relay() {
+    let setup = setup().await;
+    let server = setup.server.clone();
+    tokio::spawn(async move {
+        while let Some(incoming) = server.accept().await {
+            tokio::spawn(async move {
+                let conn = incoming.await.unwrap();
+                let (mut send, _recv) = conn.accept_bi().await.unwrap();
+                let chunk = vec![7u8; 64 * 1024];
+                for _ in 0..(200 * 1024 * 1024 / chunk.len()) {
+                    send.write_all(&chunk).await.unwrap();
+                }
+                send.finish().unwrap();
+                let _ = send.stopped().await;
+            });
+        }
+    });
+    let keys = RelayKeys::client(&SECRET);
+    let client = client_endpoint(&setup, &keys);
+    let conn = client
+        .connect(setup.relay, SERVER_NAME)
+        .unwrap()
+        .await
+        .unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    send.write_all(b"go").await.unwrap();
+    let began = std::time::Instant::now();
+    let mut total = 0usize;
+    let mut buf = vec![0u8; 256 * 1024];
+    while let Some(n) = recv.read(&mut buf).await.unwrap() {
+        total += n;
+    }
+    let secs = began.elapsed().as_secs_f64();
+    eprintln!(
+        "{} MB in {secs:.2} s: {:.1} MB/s",
+        total / 1_000_000,
+        total as f64 / secs / 1e6
+    );
+}

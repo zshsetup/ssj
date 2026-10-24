@@ -167,11 +167,13 @@ impl Frontend {
     /// process ends. Without it the client of a finished session waits for an answer that never
     /// comes.
     pub async fn close_and_flush(&mut self) {
-        if let Some(endpoint) = self.piped.take() {
+        let mut open: Vec<quinn::Endpoint> = Vec::new();
+        open.extend(self.piped.take());
+        open.extend(self.current.take());
+        for endpoint in &open {
             endpoint.close(0u8.into(), b"closed");
         }
-        if let Some(endpoint) = self.current.take() {
-            endpoint.close(0u8.into(), b"closed");
+        for endpoint in open {
             let _ = tokio::time::timeout(Duration::from_secs(1), endpoint.wait_idle()).await;
         }
     }

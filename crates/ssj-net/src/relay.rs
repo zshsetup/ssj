@@ -200,6 +200,18 @@ where
     writer.flush().await
 }
 
+/// Asks for socket buffers that hold a burst. A byte stream between the relay and the server
+/// delivers the packets in lumps, and the relay sends them on without the pacing that QUIC had
+/// given them, so the default buffer overflows and QUIC takes the loss for congestion. The system
+/// may grant less than is asked for.
+pub fn widen_buffers(socket: &std::net::UdpSocket) {
+    let socket = socket2::SockRef::from(socket);
+    let _ = socket.set_recv_buffer_size(BUFFER);
+    let _ = socket.set_send_buffer_size(BUFFER);
+}
+
+const BUFFER: usize = 4 << 20;
+
 fn receive(
     meta: &mut [RecvMeta],
     bufs: &mut [IoSliceMut<'_>],
@@ -271,6 +283,7 @@ impl EnvelopeSocket {
     pub fn bind(local: SocketAddr, relay: SocketAddr, keys: &RelayKeys) -> io::Result<Arc<Self>> {
         let socket = std::net::UdpSocket::bind(local)?;
         socket.set_nonblocking(true)?;
+        widen_buffers(&socket);
         let socket = UdpSocket::from_std(socket)?;
         let socket = Arc::new(socket);
         Ok(Arc::new(Self {
@@ -299,9 +312,15 @@ impl AsyncUdpSocket for EnvelopeSocket {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<io::Result<usize>> {
+        // everything that waits is taken at once: a relay passes packets on in bursts, and a
+        // socket that is read one packet at a time overflows its buffer in between
+        let limit = bufs.len().min(meta.len());
         let mut datagram = [0u8; MAX_DATAGRAM + ENVELOPE_LEN];
-        loop {
-            ready!(self.socket.poll_recv_ready(cx))?;
+        let mut filled = 0;
+        while filled < limit {
+            if filled == 0 {
+                ready!(self.socket.poll_recv_ready(cx))?;
+            }
             match self.socket.try_recv_from(&mut datagram) {
                 Ok((n, from)) => {
                     if from != self.relay {
@@ -310,20 +329,35 @@ impl AsyncUdpSocket for EnvelopeSocket {
                     let Some(opened) = self.opener.open(&datagram[..n]) else {
                         continue;
                     };
-                    if receive(meta, bufs, opened.payload, self.relay) {
-                        return Poll::Ready(Ok(1));
+                    if receive(
+                        &mut meta[filled..],
+                        &mut bufs[filled..],
+                        opened.payload,
+                        self.relay,
+                    ) {
+                        filled += 1;
                     }
                 }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                // nothing more now; with nothing yet, the readiness is asked for again
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if filled > 0 {
+                        break;
+                    }
+                }
                 // the network says that an earlier packet had no way, which is no reason to stop
                 Err(err) if err.kind() == io::ErrorKind::ConnectionReset => {}
                 Err(err) => return Poll::Ready(Err(err)),
             }
         }
+        Poll::Ready(Ok(filled))
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
         self.socket.local_addr()
+    }
+
+    fn max_receive_segments(&self) -> usize {
+        1
     }
 
     fn may_fragment(&self) -> bool {

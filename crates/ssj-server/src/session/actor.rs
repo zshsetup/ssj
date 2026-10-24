@@ -230,6 +230,9 @@ impl<B: Backend> Actor<B> {
             || self
                 .full_since
                 .is_some_and(|t| t.elapsed() >= config.away_after);
+        // a shell that was started for a client that has yet to come waits when the buffer is
+        // full: the first `Start` joins it only if nothing was forgotten
+        let away = away && !(self.config.prestart.is_some() && !self.ever_connected);
         let read_len = if away {
             self.buf.len()
         } else {

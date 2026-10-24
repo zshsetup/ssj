@@ -188,6 +188,7 @@ async fn relay(
     secret: [u8; SECRET_LEN],
     command: Vec<String>,
 ) -> ExitCode {
+    ssj_net::relay::widen_buffers(&socket);
     let Ok(socket) = UdpSocket::from_std(socket) else {
         return fail("cannot set up the UDP socket");
     };
