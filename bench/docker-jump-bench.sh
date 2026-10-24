@@ -9,13 +9,15 @@
 #
 #   bench/docker-jump-bench.sh [CONDITION...]
 #
-# A condition is the netem settings of the link, or `none` (the default list is none,
-# "delay 30ms", "delay 30ms loss 1%", "delay 30ms loss 3%"). Arguments for bench/jump_bench.py go in
-# BENCH_ARGS, such as BENCH_ARGS="--bulk-mb 10 --runs 2".
+# A condition is the netem settings of the link, or `none`, with `@RATE` after them for a bottleneck
+# of that bandwidth (see `set_link`). The default list is none, a long link, a long link with
+# bursts of loss, a Wi-Fi like link, and a mobile like link. Arguments for bench/jump_bench.py go
+# in BENCH_ARGS, such as BENCH_ARGS="--bulk-mb 10 --runs 2".
 #
 #   BUILD=0                       reuse the build in the docker volume
 #   HOLD=1                        set up the first condition and wait, for looking around with docker exec
 #   TARGET_VOLUME=ssj-target-musl the docker volume with release/ssj and release/ssj-server
+#   UDP=0                         skip the raw UDP reference (iperf3 through a UDP forwarder on the jump host)
 #   IMAGE=ubuntu:24.04
 set -e
 cd "$(dirname "$0")/.."
@@ -23,7 +25,12 @@ IMAGE=${IMAGE:-ubuntu:24.04}
 BUILD=${BUILD:-1}
 TARGET_VOLUME=${TARGET_VOLUME:-ssj-target-musl}
 BENCH_ARGS=${BENCH_ARGS:-}
-[ $# -gt 0 ] || set -- none "delay 30ms" "delay 30ms loss 1%" "delay 30ms loss 3%"
+[ $# -gt 0 ] || set -- \
+    none \
+    "delay 30ms 3ms" \
+    "delay 30ms 3ms loss gemodel 1% 10% 70% 0.1%" \
+    "delay 15ms 10ms loss gemodel 2% 20% 60% 0.5% reorder 1% 50% @100mbit" \
+    "delay 60ms 20ms distribution normal loss gemodel 3% 15% 80% 1% @20mbit"
 name=ssjjump-$$
 mkdir -p target
 keys=$(mktemp -d "$PWD/target/ssjjump-keys.XXXXXX")
@@ -46,9 +53,9 @@ docker network create "$name-flaky" >/dev/null
 docker network create "$name-clean" >/dev/null
 
 # the tools are in an image of their own, which is built once
-base=ssjbench-base:$(echo "$IMAGE" | tr '/:' '--')
+base=ssjbench-base2:$(echo "$IMAGE" | tr '/:' '--')
 if ! docker image inspect "$base" >/dev/null 2>&1; then
-    printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq iproute2 ethtool openssh-server openssh-client python3 && rm -rf /var/lib/apt/lists/*\n' "$IMAGE" |
+    printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq iproute2 ethtool openssh-server openssh-client python3 iperf3 socat && rm -rf /var/lib/apt/lists/*\n' "$IMAGE" |
         docker build -q -t "$base" - >/dev/null
 fi
 IMAGE=$base
@@ -100,12 +107,23 @@ until docker exec "$name-client" ssh -o BatchMode=yes -o ConnectTimeout=3 backen
     sleep 2
 done
 
+# A condition is the netem settings, optionally followed by `@RATE` for a bottleneck with that
+# bandwidth: "delay 30ms 5ms loss gemodel 1% 10% 70% 0.1% @50mbit". The queue of netem is made
+# large, since its default of 1000 packets drops what a long link holds. The bottleneck is a token
+# bucket after the delay, as a real link has, and it drops what its own queue cannot hold.
 set_link() {
+    netem=${1%%@*}
+    rate=
+    case $1 in *@*) rate=${1#*@} ;; esac
+    case $netem in *limit*) ;; *) netem="$netem limit 100000" ;; esac
     for c in client jump; do
         docker exec "$name-$c" sh -c "tc qdisc del dev eth0 root 2>/dev/null || true
 if [ '$1' != none ]; then
     ethtool -K eth0 tso off gso off gro off >/dev/null 2>&1 || true
-    tc qdisc add dev eth0 root netem $1
+    tc qdisc add dev eth0 root handle 1: netem $netem
+    if [ -n '$rate' ]; then
+        tc qdisc add dev eth0 parent 1:1 handle 10: tbf rate $rate burst 64kb latency 200ms
+    fi
 fi"
     done
 }
@@ -117,10 +135,29 @@ if [ "${HOLD:-0}" = 1 ]; then
     exit 0
 fi
 
+# the most that UDP carries through the jump host: iperf3 from the client to the backend, with the
+# packets passed on by socat on the jump host, which is what the relay does without the ssh leg
+udp_reference() {
+    docker exec -d "$name-backend" iperf3 -s -p 5201 >/dev/null
+    docker exec -d "$name-jump" sh -c 'socat TCP4-LISTEN:5201,fork,reuseaddr TCP4:backend:5201 &
+exec socat UDP4-LISTEN:5201,fork,reuseaddr UDP4:backend:5201'
+    sleep 1
+    # as fast as it goes (the receiver rate is what gets through, the loss is the overload), and at
+    # a rate of 100 MB/s, which the forwarder keeps up with on a clean link
+    for rate in 0 800M; do
+        echo "raw UDP through the jump host (iperf3 -u -b $rate, 1200-byte datagrams, 5 s):"
+        docker exec "$name-client" iperf3 -u -c jump -p 5201 -b "$rate" -l 1200 -t 5 2>&1 |
+            sed -n 's/^\[ *[0-9]*\] *\(.*receiver\)$/  \1/p' || true
+    done
+    docker exec "$name-jump" sh -c 'for p in $(pidof socat); do kill $p; done' 2>/dev/null || true
+    docker exec "$name-backend" sh -c 'for p in $(pidof iperf3); do kill $p; done' 2>/dev/null || true
+}
+
 for condition in "$@"; do
     set_link "$condition"
     echo
     echo "== link between client and jump host: $condition (each way)"
+    [ "${UDP:-1}" = 0 ] || udp_reference
     # shellcheck disable=SC2086
     docker exec "$name-client" python3 /src/bench/jump_bench.py --ssh-config /root/.ssh/config \
         --ssj /target/release/ssj --server /target/release/ssj-server $BENCH_ARGS

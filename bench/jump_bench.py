@@ -30,13 +30,15 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 DESTINATION = "backend"
 LINE = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 LOG_LINE = re.compile(r"\[ssj\s+([0-9.]+)s\] (.*)")
-# how long a command may run
-LIMIT = 300.0
+# how long a command may run; a client that hangs is killed, and its log is kept
+LIMIT = 120.0
+TIMEOUT_LOGS = "/tmp/jump-bench-timeouts"  # noqa: S108
 # more than the leg takes to come up on the slowest link
 SETTLE = 8
 
@@ -56,10 +58,10 @@ def command_line(client: str, args: argparse.Namespace, remote: str) -> list[str
     """The command line that runs `remote` on the backend with `client`."""
     ssh = f"ssh -F {args.ssh_config}"
     if client == "ssh":
-        return [*ssh.split(), DESTINATION, remote]
+        return [*ssh.split(), args.destination, remote]
     if client == "ssh_tty":
         # with a terminal, like ssj: the same pty on the backend
-        return [*ssh.split(), "-tt", DESTINATION, remote]
+        return [*ssh.split(), "-tt", args.destination, remote]
     relay = "first" if client == "relay" else "none"
     return [
         args.ssj,
@@ -71,7 +73,7 @@ def command_line(client: str, args: argparse.Namespace, remote: str) -> list[str
         "--relay",
         relay,
         "-vv",
-        DESTINATION,
+        args.destination,
         "--",
         remote,
     ]
@@ -92,6 +94,8 @@ def run(argv: list[str]) -> Result:
     err: list[bytes] = []
     thread = threading.Thread(target=lambda: err.append(child.stderr.read()))  # type: ignore[union-attr]
     thread.start()
+    timer = threading.Timer(LIMIT, child.kill)
+    timer.start()
     first: float | None = None
     size = 0
     while True:
@@ -101,13 +105,18 @@ def run(argv: list[str]) -> Result:
         if first is None:
             first = time.monotonic() - began
         size += len(chunk)
-        if time.monotonic() - began > LIMIT:
-            child.kill()
-            break
     total = time.monotonic() - began
     status = child.wait()
+    timer.cancel()
     thread.join()
-    return Result(first, total, size, status, b"".join(err).decode(errors="replace"))
+    log = b"".join(err).decode(errors="replace")
+    if total >= LIMIT:
+        folder = Path(TIMEOUT_LOGS)
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{int(time.time())}.log"
+        path.write_text(" ".join(argv) + "\n" + log)
+        print(f"timed out after {LIMIT:.0f} s, log in {path}", file=sys.stderr)
+    return Result(first, total, size, status, log)
 
 
 def log_time(log: str, text: str) -> float | None:
@@ -171,6 +180,7 @@ def main() -> None:
     """Runs every client and prints the table."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--ssh-config", required=True)
+    parser.add_argument("--destination", default=DESTINATION)
     parser.add_argument("--ssj", required=True)
     parser.add_argument("--server", required=True)
     parser.add_argument("--bulk-mb", type=int, default=30)
