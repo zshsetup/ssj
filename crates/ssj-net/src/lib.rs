@@ -343,11 +343,11 @@ pub const INITIAL_CONGESTION_WINDOW: u64 = 256 * 1024;
 
 /// Receive limits of the server, which only gets small input from the client.
 pub const SERVER_RECEIVE_WINDOW: u32 = 2 * 1024 * 1024;
-/// How much the server may have sent to the client without an acknowledgement from QUIC. Without
-/// this the transport would take the output of the shell as fast as it comes, up to the whole
-/// receive window of the client, and a slow link would hold megabytes that the server can neither
-/// skip nor compress. With it the rest waits in the buffer of the server, where it can be.
-pub const SERVER_SEND_WINDOW: u64 = 1024 * 1024;
+/// The most the server lets QUIC hold without an acknowledgement. The session keeps what it has
+/// sent and is not acknowledged to the congestion window of the path (but at least to
+/// `live_backlog`), so on a slow link the rest waits in the buffer of the server, where it can be
+/// skipped or compressed, and a link with reordering or a long round trip gets the room it needs.
+pub const SERVER_SEND_WINDOW: u64 = 16 * 1024 * 1024;
 /// Receive limits of the client, which gets the (large) output of the shell.
 pub const CLIENT_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
 

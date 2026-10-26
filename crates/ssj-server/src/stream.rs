@@ -30,6 +30,7 @@ where
     Connection {
         reader: Box::new(reader),
         writer: Box::new(writer),
+        window: None,
     }
 }
 

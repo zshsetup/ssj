@@ -2,9 +2,12 @@
 
 use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use ssj_net::INITIAL_CONGESTION_WINDOW;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -13,6 +16,21 @@ use crate::session::Connection;
 
 /// How long the peer gets to deliver pending data before the connection is closed.
 const DRAIN: Duration = Duration::from_secs(5);
+
+/// How often the congestion window of a connection is read.
+const WINDOW_POLL: Duration = Duration::from_millis(50);
+
+/// Keeps `window` at the congestion window of the connection until the connection ends.
+async fn track_window(connection: quinn::Connection, window: Arc<AtomicU64>) {
+    let mut tick = tokio::time::interval(WINDOW_POLL);
+    loop {
+        tick.tick().await;
+        if connection.close_reason().is_some() {
+            return;
+        }
+        window.store(connection.stats().path.cwnd, Ordering::Relaxed);
+    }
+}
 
 /// Receiving side of the stream of a client.
 pub struct QuicReader {
@@ -135,6 +153,8 @@ async fn serve_with(
             if let Some(observer) = observer {
                 let _ = observer.send(connection.clone());
             }
+            let window = Arc::new(AtomicU64::new(INITIAL_CONGESTION_WINDOW));
+            tokio::spawn(track_window(connection.clone(), window.clone()));
             let reader = QuicReader {
                 recv,
                 _conn: connection.clone(),
@@ -147,6 +167,7 @@ async fn serve_with(
                 .send(Connection {
                     reader: Box::new(reader),
                     writer: Box::new(writer),
+                    window: Some(window),
                 })
                 .await;
         });

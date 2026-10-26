@@ -9,6 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use ssj_net::channels::Channels;
@@ -42,6 +43,10 @@ pub const INPUT_BUDGET: usize = 2 * 1024 * 1024;
 pub struct Connection {
     pub reader: Box<dyn AsyncRead + Send + Unpin>,
     pub writer: Box<dyn AsyncWrite + Send + Unpin>,
+    /// How many bytes of output the transport can have in flight without an acknowledgement, kept
+    /// up to date by the transport (the congestion window of QUIC). A transport that has no such
+    /// number, as a byte stream, leaves it out and limits itself.
+    pub window: Option<Arc<AtomicU64>>,
 }
 
 /// Program and fixed environment of the shell. The environment of the client is added to it.
@@ -193,6 +198,8 @@ struct Active {
     pong_due: bool,
     /// Output offset up to which frames were queued for this connection.
     output_sent: u64,
+    /// How much unacknowledged output the transport can carry (see [`Connection::window`]).
+    window: Option<Arc<AtomicU64>>,
     /// Input offset that was last acknowledged to this client.
     input_acked: u64,
     /// Output offset when the client joined: what lies before it is replay and is not skipped

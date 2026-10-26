@@ -45,6 +45,7 @@ pub(super) fn start_connection(
         hello_done: false,
         pong_due: false,
         output_sent: 0,
+        window: conn.window,
         input_acked: 0,
         replay_end: 0,
         gap: 0,

@@ -120,6 +120,7 @@ async fn a_program_in_the_session_reaches_the_agent_of_the_client_but_only_for_s
                 .send(Connection {
                     reader: Box::new(server_reader),
                     writer: Box::new(server_writer),
+                    window: None,
                 })
                 .await
                 .map_err(|e| e.to_string())?;

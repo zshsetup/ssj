@@ -5,6 +5,7 @@ use std::future::pending;
 use std::io;
 use std::process::ExitStatus;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use ssj_net::channels::{Channels, Piece};
@@ -243,7 +244,10 @@ impl<B: Backend> Actor<B> {
             _ => false,
         };
         let data_pending = active.is_some_and(|a| {
-            a.pong_due || a.gap > 0 || a.output_sent < self.output.end() || exit_due
+            a.pong_due
+                || a.gap > 0
+                || (a.output_sent < self.output.end() && room_to_send(a, &self.output, config))
+                || exit_due
         });
         // an acknowledgement of input waits a moment for output to go with it: the echo of what
         // was typed follows within milliseconds, and two small packets in a row are held apart
@@ -705,7 +709,7 @@ impl<B: Backend> Actor<B> {
             ServerFrame::InputAck(self.input_received)
         } else if a.gap > 0 {
             ServerFrame::Gap(std::mem::take(&mut a.gap))
-        } else if a.output_sent < self.output.end() {
+        } else if a.output_sent < self.output.end() && room_to_send(a, &self.output, &self.config) {
             let chunk = self
                 .output
                 .read_from(a.output_sent, MAX_DATA_LEN)
@@ -780,6 +784,18 @@ async fn wait_until(deadline: Option<Instant>) {
 ///
 /// Output from before `replay_end` is not counted as waiting: a client that joins gets the replay
 /// at the speed of its link, and only what the shell writes afterwards is limited to `live` bytes.
+/// Whether more output may go out: the transport can carry about twice its congestion window
+/// without an acknowledgement (the room for what is lost and reordered), and `live_backlog` at
+/// least, so Ctrl-C does not wait behind more than that. A connection without a window has a
+/// transport that limits itself.
+fn room_to_send(a: &Active, output: &ReplayBuffer, config: &SessionConfig) -> bool {
+    let Some(window) = &a.window else {
+        return true;
+    };
+    let allowed = (2 * window.load(Ordering::Relaxed)).max(config.live_backlog as u64);
+    a.output_sent.saturating_sub(output.start()) < allowed
+}
+
 fn skip_ahead(sent: &mut u64, replay_end: u64, output: &ReplayBuffer, live: usize) -> u64 {
     let end = output.end();
     let mut target = (*sent).max(output.start());

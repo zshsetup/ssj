@@ -37,6 +37,7 @@ fn slow_dial(conns: mpsc::Sender<Connection>, delay: Duration) -> Dial {
                 .send(Connection {
                     reader: Box::new(server_reader),
                     writer: Box::new(server_writer),
+                    window: None,
                 })
                 .await
                 .map_err(|e| e.to_string())?;

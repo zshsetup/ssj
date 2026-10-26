@@ -87,6 +87,7 @@ impl Harness {
             .send(Connection {
                 reader: Box::new(server_reader),
                 writer: Box::new(server_writer),
+                window: None,
             })
             .await
             .unwrap();
