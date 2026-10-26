@@ -34,7 +34,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 DESTINATION = "backend"
 LINE = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -186,16 +186,50 @@ def bulk(client: str, args: argparse.Namespace, wait: int) -> dict[str, Any]:
     }
 
 
+def collect_lines(stream: IO[bytes], log: list[tuple[float, str]]) -> None:
+    """Keeps the lines that a client writes, with the time they came."""
+    log.extend((time.monotonic(), line.decode(errors="replace").rstrip()) for line in stream)
+
+
+def wait_for(child: subprocess.Popen[bytes], token: bytes, sent: float) -> float | None:
+    """The milliseconds until `token` comes out of the client, or `None` after five seconds."""
+    if child.stdout is None:
+        return None
+    seen = b""
+    while token not in seen:
+        left = 5.0 - (time.monotonic() - sent)
+        if left <= 0 or not select.select([child.stdout], [], [], left)[0]:
+            return None
+        seen += os.read(child.stdout.fileno(), 4096)
+    return (time.monotonic() - sent) * 1000
+
+
+def show_slow(slow: list[tuple[float, float]], log: list[tuple[float, str]]) -> None:
+    """Prints the lines of the log around each slow echo."""
+    for sent, took in slow:
+        print(f"  slow echo: {took:.0f} ms, log lines around it:")
+        for when, line in log:
+            if sent - 1.0 <= when <= sent + took / 1000 + 0.5:
+                print(f"    {when - sent:+.2f}s {line}")
+
+
 def echo(client: str, args: argparse.Namespace) -> dict[str, Any]:
     """How long a typed line takes to come back, after the relay has taken over."""
     argv = command_line(client, args, "stty -echo 2>/dev/null; exec cat")
     child = subprocess.Popen(
-        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE if args.echo_explain else subprocess.DEVNULL,
     )
     if child.stdin is None or child.stdout is None:
         msg = "the pipes are not there"
         raise RuntimeError(msg)
+    log: list[tuple[float, str]] = []
+    if child.stderr is not None:
+        threading.Thread(target=collect_lines, args=(child.stderr, log), daemon=True).start()
     times: list[float] = []
+    slow: list[tuple[float, float]] = []
     try:
         time.sleep(SETTLE + 2)
         for number in range(args.echo_samples):
@@ -203,18 +237,16 @@ def echo(client: str, args: argparse.Namespace) -> dict[str, Any]:
             sent = time.monotonic()
             child.stdin.write(f"{token}\n".encode())
             child.stdin.flush()
-            seen = b""
-            while token.encode() not in seen:
-                left = 5.0 - (time.monotonic() - sent)
-                if left <= 0 or not select.select([child.stdout], [], [], left)[0]:
-                    break
-                seen += os.read(child.stdout.fileno(), 4096)
-            else:
-                times.append((time.monotonic() - sent) * 1000)
+            took = wait_for(child, token.encode(), sent)
+            if took is not None:
+                times.append(took)
+                if took > args.echo_slow_ms:
+                    slow.append((sent, took))
             time.sleep(0.05)
     finally:
         child.kill()
         child.wait()
+    show_slow(slow, log)
     times.sort()
     return {
         "median_ms": median(times),
@@ -239,6 +271,10 @@ def main() -> None:
     parser.add_argument("--slow-client", default="wait", choices=["wait", "drop"])
     parser.add_argument("--echo-samples", type=int, default=20)
     parser.add_argument("--echo-only", action="store_true", help="only the echo test")
+    parser.add_argument(
+        "--echo-explain", action="store_true", help="show the log around slow echoes (use -vv)"
+    )
+    parser.add_argument("--echo-slow-ms", type=float, default=200.0)
     parser.add_argument(
         "--echo-clients", default="ssh,ssh_tty,stdio,relay", help="the clients of --echo-only"
     )
