@@ -3,8 +3,11 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::{Endpoint, EndpointConfig, TokioRuntime};
-use ssj_net::relay::{EnvelopeSocket, IDLE, RelayKeys, SECRET_LEN, StreamSocket, forward};
+use quinn::udp::RecvMeta;
+use quinn::{AsyncUdpSocket, Endpoint, EndpointConfig, TokioRuntime};
+use ssj_net::relay::{
+    Direction, EnvelopeSocket, IDLE, RelayKeys, SECRET_LEN, Sealer, StreamSocket, forward,
+};
 use ssj_net::{Identity, SERVER_NAME, client_tls, quic_client, quic_server, server_tls};
 use tokio::io::{AsyncWriteExt, duplex, split};
 use tokio::net::UdpSocket;
@@ -208,4 +211,45 @@ async fn measure_the_speed_of_the_relay() {
         total / 1_000_000,
         total as f64 / secs / 1e6
     );
+}
+
+/// A path that reorders packets must not reach QUIC reordered: QUIC takes it for loss.
+#[tokio::test]
+async fn datagrams_that_the_path_reordered_reach_quic_in_order() {
+    let relay = UdpSocket::bind(localhost()).await.unwrap();
+    let keys = RelayKeys::client(&SECRET);
+    let socket = EnvelopeSocket::bind(localhost(), relay.local_addr().unwrap(), &keys).unwrap();
+    let to = socket.local_addr().unwrap();
+    let sealer = Sealer::new(&SECRET, Direction::ToClient);
+    let mut sealed = Vec::new();
+    let mut sent = Vec::new();
+    for payload in 1u8..=6 {
+        sealer.seal(&[payload; 40], &mut sealed);
+        sent.push(sealed.clone());
+    }
+    for index in [0, 2, 1, 4, 3, 5] {
+        relay.send_to(&sent[index], to).await.unwrap();
+    }
+
+    let mut seen = Vec::new();
+    while seen.len() < 6 {
+        let mut storage = [[0u8; 2048]; 8];
+        let mut bufs: Vec<_> = storage
+            .iter_mut()
+            .map(|b| std::io::IoSliceMut::new(b))
+            .collect();
+        let mut meta = [RecvMeta::default(); 8];
+        let got = tokio::time::timeout(
+            Duration::from_secs(5),
+            std::future::poll_fn(|cx| socket.poll_recv(cx, &mut bufs, &mut meta)),
+        )
+        .await
+        .expect("datagrams arrive")
+        .unwrap();
+        for (buf, m) in bufs.iter().zip(&meta).take(got) {
+            seen.push(buf[0]);
+            assert_eq!(m.len, 40);
+        }
+    }
+    assert_eq!(seen, [1, 2, 3, 4, 5, 6]);
 }

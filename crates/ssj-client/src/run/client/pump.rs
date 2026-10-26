@@ -11,7 +11,7 @@ use tokio::task::{JoinError, JoinSet};
 use tokio::time::error::Elapsed;
 use tokio::time::{interval, sleep_until, timeout};
 
-use super::{Client, Link, Pumped, Upgrade, exit_code, next_cause, redraw};
+use super::{ACK_BULK, Client, Link, Pumped, Upgrade, exit_code, next_cause, redraw};
 use crate::agent::Forward;
 use crate::debounce::Debounce;
 use crate::netwatch::Cause;
@@ -290,7 +290,10 @@ impl Client {
         // a status that was held back because of a sequence can go out now.
         self.sync_status(false).await;
         self.output_offset += data.len() as u64;
-        if !link.reader.frame_ready() {
+        // with frames arriving back to back there is no gap in which to acknowledge, and the
+        // server would wait for the acknowledgement with its buffer full
+        let behind = self.output_offset.saturating_sub(self.acked_output);
+        if !link.reader.frame_ready() || behind >= ACK_BULK {
             self.ack_output(&link.out, false);
         }
         Ok(())

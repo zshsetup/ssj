@@ -116,6 +116,39 @@ impl Policy {
     }
 }
 
+/// The lowest smoothed round-trip time of the last [`FLOOR_WINDOW`]. The lowest time that ever
+/// was measured is the better floor on a steady path, but with jitter it is one lucky sample far
+/// below the usual time, and every loss then looks like the work of a queue.
+#[derive(Clone, Debug, Default)]
+struct Floor {
+    /// The lowest time of each second that had a measurement.
+    seconds: VecDeque<(Instant, Duration)>,
+}
+
+const FLOOR_WINDOW: Duration = Duration::from_secs(30);
+
+impl Floor {
+    fn observe(&mut self, now: Instant, smoothed: Duration) {
+        match self.seconds.back_mut() {
+            Some((start, lowest)) if now.duration_since(*start) < Duration::from_secs(1) => {
+                *lowest = (*lowest).min(smoothed);
+            }
+            _ => self.seconds.push_back((now, smoothed)),
+        }
+        while self
+            .seconds
+            .front()
+            .is_some_and(|(start, _)| now.duration_since(*start) > FLOOR_WINDOW)
+        {
+            self.seconds.pop_front();
+        }
+    }
+
+    fn get(&self) -> Option<Duration> {
+        self.seconds.iter().map(|(_, lowest)| *lowest).min()
+    }
+}
+
 /// Builds [`Adaptive`] controllers.
 pub struct AdaptiveConfig {
     pub initial_window: u64,
@@ -132,6 +165,7 @@ impl ControllerFactory for AdaptiveConfig {
             bbr: Arc::new(bbr).build(now, mtu),
             policy: Policy::new(now),
             rtt: None,
+            floor: Floor::default(),
             initial_window: self.initial_window,
         })
     }
@@ -144,6 +178,7 @@ struct Adaptive {
     /// The smoothed and the smallest round-trip time of the last acknowledgement, and how far the
     /// round-trip time wanders.
     rtt: Option<(Duration, Duration, Duration)>,
+    floor: Floor,
     initial_window: u64,
 }
 
@@ -182,7 +217,9 @@ impl Controller for Adaptive {
         // the estimator keeps the deviation to itself; the conservative time is the smoothed one
         // plus four times the deviation
         let spread = rtt.conservative().saturating_sub(rtt.get());
-        self.rtt = Some((rtt.get(), rtt.min(), spread));
+        self.floor.observe(now, rtt.get());
+        let floor = self.floor.get().unwrap_or_else(|| rtt.min());
+        self.rtt = Some((rtt.get(), floor, spread));
         self.tick(now);
     }
 
@@ -206,10 +243,21 @@ impl Controller for Adaptive {
         is_persistent_congestion: bool,
         lost_bytes: u64,
     ) {
-        self.cubic
-            .on_congestion_event(now, sent, is_persistent_congestion, lost_bytes);
-        self.bbr
-            .on_congestion_event(now, sent, is_persistent_congestion, lost_bytes);
+        // a loss with no queue in front of it says nothing about the capacity. CUBIC that cut its
+        // window for it would need seconds to grow back (a single stray loss in the first round
+        // trips left a bulk transfer at a tenth of the link for ten seconds), and BBR that went
+        // into recovery for a loss that the jitter of the path made up fell to its smallest window.
+        let random = lost_bytes > 0
+            && !is_persistent_congestion
+            && self
+                .rtt
+                .is_some_and(|(smoothed, min, spread)| Policy::is_random(smoothed, min, spread));
+        if !random {
+            self.cubic
+                .on_congestion_event(now, sent, is_persistent_congestion, lost_bytes);
+            self.bbr
+                .on_congestion_event(now, sent, is_persistent_congestion, lost_bytes);
+        }
         // lost_bytes is 0 for a mark of congestion by the network (ECN), which is a queue.
         if lost_bytes > 0
             && let Some((smoothed, min, spread)) = self.rtt
@@ -238,6 +286,7 @@ impl Controller for Adaptive {
             bbr: self.bbr.clone_box(),
             policy: self.policy.clone(),
             rtt: self.rtt,
+            floor: self.floor.clone(),
             initial_window: self.initial_window,
         })
     }
@@ -248,5 +297,26 @@ impl Controller for Adaptive {
 
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_floor_is_the_lowest_time_of_the_window_and_forgets_older_ones() {
+        let start = Instant::now();
+        let mut floor = Floor::default();
+        floor.observe(start, Duration::from_millis(40));
+        floor.observe(start + Duration::from_secs(2), Duration::from_millis(120));
+        floor.observe(start + Duration::from_secs(3), Duration::from_millis(130));
+        assert_eq!(floor.get(), Some(Duration::from_millis(40)));
+        // the low time lies outside the window now
+        floor.observe(
+            start + FLOOR_WINDOW + Duration::from_secs(5),
+            Duration::from_millis(125),
+        );
+        assert_eq!(floor.get(), Some(Duration::from_millis(125)));
     }
 }

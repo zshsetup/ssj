@@ -36,6 +36,9 @@ const RESOLVE_EVERY: usize = 3;
 const PING_EVERY: Duration = Duration::from_secs(1);
 /// Output that is acknowledged at once. Less waits for a frame that goes out anyway.
 const ACK_BYTES: u64 = 4096;
+/// Output that is shown and not acknowledged yet, from which on it is acknowledged at once even
+/// if more frames are waiting.
+const ACK_BULK: u64 = 64 * 1024;
 /// Input is compressed only while at least this many bytes wait for the server to take them.
 const COMPRESS_BACKLOG: u64 = 256 * 1024;
 /// Chunks shorter than this are not worth compressing.

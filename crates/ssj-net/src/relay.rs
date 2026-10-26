@@ -14,6 +14,7 @@
 //! - [`forward`] is the relay itself.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::io::{self, IoSliceMut};
@@ -30,6 +31,9 @@ use ring::hmac;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch};
+use tokio::time::Sleep;
+
+use crate::resequence::Resequencer;
 
 /// Bytes of the secret that the client and the relay share.
 pub const SECRET_LEN: usize = 32;
@@ -115,6 +119,8 @@ pub struct Opened<'a> {
     /// The counter is higher than any before it. Only such a packet may move the address that the
     /// relay answers: a recorded packet is never the newest.
     pub newest: bool,
+    /// The counter of the datagram, for putting what a path reordered back in order.
+    pub counter: u64,
 }
 
 /// Checks the envelope on the datagrams of one direction.
@@ -168,7 +174,11 @@ impl Opener {
         }
         let place = (counter % WINDOW) as usize;
         bits[place / 64] |= 1 << (place % 64);
-        Some(Opened { payload, newest })
+        Some(Opened {
+            payload,
+            newest,
+            counter,
+        })
     }
 }
 
@@ -230,6 +240,8 @@ pub fn widen_buffers(socket: &std::net::UdpSocket) {
 }
 
 const BUFFER: usize = 4 << 20;
+/// Datagrams taken from the socket before they are handed to QUIC.
+const RECEIVE_BATCH: usize = 64;
 
 fn receive(
     meta: &mut [RecvMeta],
@@ -261,6 +273,16 @@ pub struct EnvelopeSocket {
     relay: SocketAddr,
     sealer: Arc<Sealer>,
     opener: Arc<Opener>,
+    inbound: Mutex<Inbound>,
+}
+
+/// The datagrams that came in, in the order that they were sent in.
+struct Inbound {
+    order: Resequencer,
+    /// Datagrams that are in order and wait for room in the buffers of QUIC.
+    ready: VecDeque<Vec<u8>>,
+    /// Runs out when the datagrams behind a hole must go on.
+    timer: Pin<Box<Sleep>>,
 }
 
 impl fmt::Debug for EnvelopeSocket {
@@ -310,6 +332,11 @@ impl EnvelopeSocket {
             relay,
             sealer: keys.sealer.clone(),
             opener: keys.opener.clone(),
+            inbound: Mutex::new(Inbound {
+                order: Resequencer::new(),
+                ready: VecDeque::new(),
+                timer: Box::pin(tokio::time::sleep(Duration::ZERO)),
+            }),
         }))
     }
 }
@@ -335,44 +362,72 @@ impl AsyncUdpSocket for EnvelopeSocket {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<io::Result<usize>> {
-        // everything that waits is taken at once: a relay passes packets on in bursts, and a
-        // socket that is read one packet at a time overflows its buffer in between
         let limit = bufs.len().min(meta.len());
+        let mut inbound = self.inbound.lock().expect("not poisoned");
+        let inbound = &mut *inbound;
         let mut datagram = [0u8; MAX_DATAGRAM + ENVELOPE_LEN];
-        let mut filled = 0;
-        while filled < limit {
-            if filled == 0 {
-                ready!(self.socket.poll_recv_ready(cx))?;
-            }
-            match self.socket.try_recv_from(&mut datagram) {
-                Ok((n, from)) => {
-                    if from != self.relay {
-                        continue;
+        let mut arrived = Vec::new();
+        loop {
+            // everything that waits is taken at once: a relay passes packets on in bursts, and a
+            // socket that is read one packet at a time overflows its buffer in between
+            while inbound.ready.len() < RECEIVE_BATCH {
+                match self.socket.try_recv_from(&mut datagram) {
+                    Ok((n, from)) => {
+                        if from != self.relay {
+                            continue;
+                        }
+                        let Some(opened) = self.opener.open(&datagram[..n]) else {
+                            continue;
+                        };
+                        // QUIC takes what a path reordered for loss, so it gets the packets in
+                        // the order that they were sent in
+                        inbound.order.push(
+                            opened.counter,
+                            opened.payload,
+                            Instant::now(),
+                            &mut arrived,
+                        );
+                        inbound.ready.extend(arrived.drain(..));
                     }
-                    let Some(opened) = self.opener.open(&datagram[..n]) else {
-                        continue;
-                    };
-                    if receive(
-                        &mut meta[filled..],
-                        &mut bufs[filled..],
-                        opened.payload,
-                        self.relay,
-                    ) {
-                        filled += 1;
-                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                    // the network says that an earlier packet had no way, which is no reason to
+                    // stop
+                    Err(err) if err.kind() == io::ErrorKind::ConnectionReset => {}
+                    Err(err) => return Poll::Ready(Err(err)),
                 }
-                // nothing more now; with nothing yet, the readiness is asked for again
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    if filled > 0 {
-                        break;
-                    }
-                }
-                // the network says that an earlier packet had no way, which is no reason to stop
-                Err(err) if err.kind() == io::ErrorKind::ConnectionReset => {}
-                Err(err) => return Poll::Ready(Err(err)),
             }
+            inbound.order.expire(Instant::now(), &mut arrived);
+            inbound.ready.extend(arrived.drain(..));
+            let mut filled = 0;
+            while filled < limit
+                && let Some(next) = inbound.ready.front()
+            {
+                if receive(&mut meta[filled..], &mut bufs[filled..], next, self.relay) {
+                    filled += 1;
+                }
+                inbound.ready.pop_front();
+            }
+            if filled > 0 {
+                if !inbound.ready.is_empty() {
+                    cx.waker().wake_by_ref();
+                }
+                return Poll::Ready(Ok(filled));
+            }
+            // nothing to hand over: wake up for the next datagram, and for the end of a wait
+            if self.socket.poll_recv_ready(cx)?.is_ready() {
+                continue;
+            }
+            if let Some(deadline) = inbound.order.deadline() {
+                inbound
+                    .timer
+                    .as_mut()
+                    .reset(tokio::time::Instant::from_std(deadline));
+                if inbound.timer.as_mut().poll(cx).is_ready() {
+                    continue;
+                }
+            }
+            return Poll::Pending;
         }
-        Poll::Ready(Ok(filled))
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {

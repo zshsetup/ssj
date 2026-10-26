@@ -3,6 +3,7 @@
 pub mod adaptive;
 pub mod channels;
 pub mod relay;
+pub mod resequence;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
