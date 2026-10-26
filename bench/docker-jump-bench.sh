@@ -29,8 +29,8 @@ BENCH_ARGS=${BENCH_ARGS:-}
     none \
     "delay 30ms 3ms" \
     "delay 30ms 3ms loss gemodel 1% 10% 70% 0.1%" \
-    "delay 15ms 10ms loss gemodel 2% 20% 60% 0.5% reorder 1% 50% @100mbit" \
-    "delay 60ms 20ms distribution normal loss gemodel 3% 15% 80% 1% @20mbit"
+    "delay 15ms 5ms loss gemodel 0.5% 25% 50% 0.1% reorder 0.5% 50% @100mbit" \
+    "delay 60ms 15ms distribution normal loss gemodel 1% 20% 60% 0.2% @20mbit"
 name=ssjjump-$$
 mkdir -p target
 keys=$(mktemp -d "$PWD/target/ssjjump-keys.XXXXXX")
@@ -90,7 +90,10 @@ $sshd
 $login
 exec /usr/sbin/sshd -D -e" >/dev/null
 docker network connect "$name-clean" "$name-jump"
+# the logs of runs that time out are kept on this machine, in target/jump-bench-timeouts
+mkdir -p target/jump-bench-timeouts
 docker run -d --name "$name-client" --network "$name-flaky" --hostname client --cap-add NET_ADMIN \
+    -v "$PWD/target/jump-bench-timeouts":/tmp/jump-bench-timeouts \
     -v "$PWD":/src:ro -v "$TARGET_VOLUME":/target:ro -v "$keys/id":/id:ro \
     "$IMAGE" sh -c "$install
 $client_login

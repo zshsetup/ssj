@@ -15,6 +15,7 @@
 
 use std::cell::RefCell;
 use std::fmt;
+use std::future::Future;
 use std::io::{self, IoSliceMut};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -42,7 +43,8 @@ const TAG_LEN: usize = 16;
 /// Datagrams that wait for the stream to the server, or for the endpoint to take them.
 const QUEUE: usize = 512;
 /// Counters that a packet may trail the newest one by and still pass, as in WireGuard.
-const WINDOW: u64 = 64;
+const WINDOW: u64 = 4096;
+const WORDS: usize = (WINDOW / 64) as usize;
 
 /// A fresh secret for a client and its relay.
 pub fn random_secret() -> io::Result<[u8; SECRET_LEN]> {
@@ -119,8 +121,9 @@ pub struct Opened<'a> {
 pub struct Opener {
     key: hmac::Key,
     direction: Direction,
-    /// The highest counter that passed, and a bit for each of the [`WINDOW`] before it.
-    seen: Mutex<(u64, u64)>,
+    /// The highest counter that passed, and a bit for each of the [`WINDOW`] counters up to it, at
+    /// the place of the counter modulo the window.
+    seen: Mutex<(u64, [u64; WORDS])>,
 }
 
 impl Opener {
@@ -128,7 +131,7 @@ impl Opener {
         Self {
             key: hmac::Key::new(hmac::HMAC_SHA256, secret),
             direction,
-            seen: Mutex::new((0, 0)),
+            seen: Mutex::new((0, [0; WORDS])),
         }
     }
 
@@ -149,17 +152,22 @@ impl Opener {
         let (highest, bits) = &mut *seen;
         let newest = counter > *highest;
         if newest {
-            let shift = counter - *highest;
-            *bits = if shift >= 64 { 0 } else { *bits << shift };
-            *bits |= 1;
+            // the counters that this one passes are new: their bits are cleared
+            let passed = (counter - *highest).min(WINDOW);
+            for gone in counter - passed + 1..=counter {
+                let place = (gone % WINDOW) as usize;
+                bits[place / 64] &= !(1 << (place % 64));
+            }
             *highest = counter;
         } else {
             let behind = *highest - counter;
-            if counter == 0 || behind >= WINDOW || *bits & (1 << behind) != 0 {
+            let place = (counter % WINDOW) as usize;
+            if counter == 0 || behind >= WINDOW || bits[place / 64] & (1 << (place % 64)) != 0 {
                 return None;
             }
-            *bits |= 1 << behind;
         }
+        let place = (counter % WINDOW) as usize;
+        bits[place / 64] |= 1 << (place % 64);
         Some(Opened { payload, newest })
     }
 }
@@ -401,12 +409,35 @@ impl fmt::Debug for StreamSocket {
     }
 }
 
-#[derive(Debug)]
-struct AlwaysWritable;
+/// Writable while the queue to the stream has room, so that QUIC waits for the stream and does
+/// not lose packets to a queue that a burst has filled (which it takes for congestion).
+struct QueueRoom {
+    queue: mpsc::Sender<Vec<u8>>,
+    waiting: Option<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
+}
 
-impl UdpPoller for AlwaysWritable {
-    fn poll_writable(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+impl fmt::Debug for QueueRoom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QueueRoom").finish_non_exhaustive()
+    }
+}
+
+impl UdpPoller for QueueRoom {
+    fn poll_writable(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        loop {
+            if let Some(waiting) = self.waiting.as_mut() {
+                ready!(waiting.as_mut().poll(cx));
+                self.waiting = None;
+            }
+            // a closed queue is writable too: the packets go nowhere, which is a lost packet
+            if self.queue.is_closed() || self.queue.capacity() > 0 {
+                return Poll::Ready(Ok(()));
+            }
+            let queue = self.queue.clone();
+            self.waiting = Some(Box::pin(async move {
+                let _ = queue.reserve().await;
+            }));
+        }
     }
 }
 
@@ -473,13 +504,22 @@ impl StreamSocket {
 
 impl AsyncUdpSocket for StreamSocket {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
-        Box::pin(AlwaysWritable)
+        Box::pin(QueueRoom {
+            queue: self.outgoing.clone(),
+            waiting: None,
+        })
     }
 
     fn try_send(&self, transmit: &Transmit) -> io::Result<()> {
         if transmit.contents.len() <= MAX_DATAGRAM {
-            // a full queue is a lost packet
-            let _ = self.outgoing.try_send(transmit.contents.to_vec());
+            match self.outgoing.try_send(transmit.contents.to_vec()) {
+                // QUIC waits for room and sends the packet again
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                // the stream is gone: the endpoint is closed by `ended`
+                Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+            }
         }
         Ok(())
     }

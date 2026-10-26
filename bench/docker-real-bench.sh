@@ -32,7 +32,10 @@ fi
 
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT INT TERM
 
+# the logs of runs that time out are kept on this machine, in target/jump-bench-timeouts
+mkdir -p target/jump-bench-timeouts
 docker run -d --name "$name" --hostname bench --cap-add NET_ADMIN \
+    -v "$PWD/target/jump-bench-timeouts":/tmp/jump-bench-timeouts \
     -v "$PWD":/src:ro -v "$TARGET_VOLUME":/target:ro \
     -v "$HOME/.ssh/known_hosts":/known_hosts:ro \
     -v "$agent":/agent.sock -e SSH_AUTH_SOCK=/agent.sock \

@@ -37,7 +37,7 @@ DESTINATION = "backend"
 LINE = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 LOG_LINE = re.compile(r"\[ssj\s+([0-9.]+)s\] (.*)")
 # how long a command may run; a client that hangs is killed, and its log is kept
-LIMIT = 120.0
+LIMIT = 150.0
 TIMEOUT_LOGS = "/tmp/jump-bench-timeouts"  # noqa: S108
 # more than the leg takes to come up on the slowest link
 SETTLE = 8

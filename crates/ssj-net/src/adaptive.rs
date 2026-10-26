@@ -65,15 +65,23 @@ impl Policy {
         self.bbr
     }
 
-    /// Whether a loss at this round-trip time, against the smallest one seen, is random.
-    pub fn is_random(smoothed: Duration, min: Duration) -> bool {
-        smoothed <= min.mul_f64(1.0 + QUEUE_FRACTION) + QUEUE_SLACK
+    /// Whether a loss at this round-trip time, against the smallest one seen, is random. `spread`
+    /// is how far the round-trip time wanders (four times its deviation): on a path with jitter
+    /// the smallest time is an extreme, and the usual one lies far above it with no queue at all.
+    pub fn is_random(smoothed: Duration, min: Duration, spread: Duration) -> bool {
+        smoothed <= min.mul_f64(1.0 + QUEUE_FRACTION) + QUEUE_SLACK + spread
     }
 
     /// Bytes were lost. Returns true if this moved the connection to BBR.
-    pub fn on_loss(&mut self, now: Instant, smoothed: Duration, min: Duration) -> bool {
+    pub fn on_loss(
+        &mut self,
+        now: Instant,
+        smoothed: Duration,
+        min: Duration,
+        spread: Duration,
+    ) -> bool {
         self.last_loss = Some(now);
-        if !Self::is_random(smoothed, min) {
+        if !Self::is_random(smoothed, min, spread) {
             return false;
         }
         self.random_losses.push_back(now);
@@ -133,8 +141,9 @@ struct Adaptive {
     cubic: Box<dyn Controller>,
     bbr: Box<dyn Controller>,
     policy: Policy,
-    /// The smoothed and the smallest round-trip time of the last acknowledgement.
-    rtt: Option<(Duration, Duration)>,
+    /// The smoothed and the smallest round-trip time of the last acknowledgement, and how far the
+    /// round-trip time wanders.
+    rtt: Option<(Duration, Duration, Duration)>,
     initial_window: u64,
 }
 
@@ -170,7 +179,10 @@ impl Controller for Adaptive {
     ) {
         self.cubic.on_ack(now, sent, bytes, app_limited, rtt);
         self.bbr.on_ack(now, sent, bytes, app_limited, rtt);
-        self.rtt = Some((rtt.get(), rtt.min()));
+        // the estimator keeps the deviation to itself; the conservative time is the smoothed one
+        // plus four times the deviation
+        let spread = rtt.conservative().saturating_sub(rtt.get());
+        self.rtt = Some((rtt.get(), rtt.min(), spread));
         self.tick(now);
     }
 
@@ -200,8 +212,8 @@ impl Controller for Adaptive {
             .on_congestion_event(now, sent, is_persistent_congestion, lost_bytes);
         // lost_bytes is 0 for a mark of congestion by the network (ECN), which is a queue.
         if lost_bytes > 0
-            && let Some((smoothed, min)) = self.rtt
-            && self.policy.on_loss(now, smoothed, min)
+            && let Some((smoothed, min, spread)) = self.rtt
+            && self.policy.on_loss(now, smoothed, min, spread)
         {
             TO_BBR.fetch_add(1, Ordering::Relaxed);
         }
