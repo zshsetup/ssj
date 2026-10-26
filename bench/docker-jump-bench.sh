@@ -17,6 +17,8 @@
 #   BUILD=0                       reuse the build in the docker volume
 #   HOLD=1                        set up the first condition and wait, for looking around with docker exec
 #   TARGET_VOLUME=ssj-target-musl the docker volume with release/ssj and release/ssj-server
+#   SEED=1                        seed of the random numbers of netem, so that loss and jitter repeat
+#                                 (0 for none); needs a tc that knows `seed`, which the image builds
 #   UDP=0                         skip the raw UDP reference (iperf3 through a UDP forwarder on the jump host)
 #   IMAGE=ubuntu:24.04
 set -e
@@ -53,9 +55,10 @@ docker network create "$name-flaky" >/dev/null
 docker network create "$name-clean" >/dev/null
 
 # the tools are in an image of their own, which is built once
-base=ssjbench-base2:$(echo "$IMAGE" | tr '/:' '--')
+base=ssjbench-base3:$(echo "$IMAGE" | tr '/:' '--')
 if ! docker image inspect "$base" >/dev/null 2>&1; then
-    printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq iproute2 ethtool openssh-server openssh-client python3 iperf3 socat && rm -rf /var/lib/apt/lists/*\n' "$IMAGE" |
+    # the tc of the distribution is too old for `seed` (it came with iproute2 6.3)
+    printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq iproute2 ethtool openssh-server openssh-client python3 iperf3 socat build-essential bison flex pkg-config curl xz-utils && curl -fsSL https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-6.15.0.tar.xz | tar -xJ -C /tmp && cd /tmp/iproute2-6.15.0 && ./configure >/dev/null && make -j4 >/dev/null 2>&1 && install -m 755 tc/tc /usr/local/sbin/tc && cd / && rm -rf /tmp/iproute2-6.15.0 /var/lib/apt/lists/*\n' "$IMAGE" |
         docker build -q -t "$base" - >/dev/null
 fi
 IMAGE=$base
@@ -119,11 +122,16 @@ set_link() {
     rate=
     case $1 in *@*) rate=${1#*@} ;; esac
     case $netem in *limit*) ;; *) netem="$netem limit 100000" ;; esac
+    seed=${SEED:-1}
     for c in client jump; do
+        # the two ends draw different numbers
+        seeded=$netem
+        [ "${SEED:-1}" = 0 ] || seeded="$netem seed $seed"
+        seed=$((seed + 1))
         docker exec "$name-$c" sh -c "tc qdisc del dev eth0 root 2>/dev/null || true
 if [ '$1' != none ]; then
     ethtool -K eth0 tso off gso off gro off >/dev/null 2>&1 || true
-    tc qdisc add dev eth0 root handle 1: netem $netem
+    tc qdisc add dev eth0 root handle 1: netem $seeded
     if [ -n '$rate' ]; then
         tc qdisc add dev eth0 parent 1:1 handle 10: tbf rate $rate burst 64kb latency 200ms
     fi
