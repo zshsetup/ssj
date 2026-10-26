@@ -10,6 +10,8 @@ client runs a command on the backend through the jump host, with no terminal:
 - first connect: the time until the output of `echo ok` arrives, and for the relay the time until
   the session has moved to it (it starts on the ssh channel and moves when the leg is up);
 - bulk from the start: `yes | head -c N`, with the login in the time, as a script would run it;
+- echo: how long a line typed takes to come back from `cat`, once the relay carries the session,
+  which is what typing feels like (median and the slowest of 20);
 - bulk after idle: the same after `sleep`, timed from the first byte. The relay has taken over
   by then, so it carries all of it; ssh and ssj over the ssh channel have nothing to switch to
   and show the same test as a reference.
@@ -24,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import select
 import statistics
 import subprocess
 import sys
@@ -183,6 +186,43 @@ def bulk(client: str, args: argparse.Namespace, wait: int) -> dict[str, Any]:
     }
 
 
+def echo(client: str, args: argparse.Namespace) -> dict[str, Any]:
+    """How long a typed line takes to come back, after the relay has taken over."""
+    argv = command_line(client, args, "stty -echo 2>/dev/null; exec cat")
+    child = subprocess.Popen(
+        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
+    if child.stdin is None or child.stdout is None:
+        msg = "the pipes are not there"
+        raise RuntimeError(msg)
+    times: list[float] = []
+    try:
+        time.sleep(SETTLE + 2)
+        for number in range(args.echo_samples):
+            token = f"p{number}x"
+            sent = time.monotonic()
+            child.stdin.write(f"{token}\n".encode())
+            child.stdin.flush()
+            seen = b""
+            while token.encode() not in seen:
+                left = 5.0 - (time.monotonic() - sent)
+                if left <= 0 or not select.select([child.stdout], [], [], left)[0]:
+                    break
+                seen += os.read(child.stdout.fileno(), 4096)
+            else:
+                times.append((time.monotonic() - sent) * 1000)
+            time.sleep(0.05)
+    finally:
+        child.kill()
+        child.wait()
+    times.sort()
+    return {
+        "median_ms": median(times),
+        "worst_ms": times[-1] if times else None,
+        "samples": f"{len(times)}/{args.echo_samples}",
+    }
+
+
 def main() -> None:
     """Runs every client and prints the table."""
     parser = argparse.ArgumentParser()
@@ -196,14 +236,21 @@ def main() -> None:
         "--text", action="store_true", help="compressible output instead of random bytes"
     )
     parser.add_argument("--slow-client", default="wait", choices=["wait", "drop"])
+    parser.add_argument("--echo-samples", type=int, default=20)
+    parser.add_argument("--echo-only", action="store_true", help="only the echo test")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+    if args.echo_only:
+        for client in ("ssh", "ssh_tty", "stdio", "relay"):
+            print(client, echo(client, args))
+        return
     results: dict[str, Any] = {}
     for client in ("ssh", "ssh_tty", "stdio", "relay"):
         results[client] = {
             "first": first_connect(client, args),
             "bulk_from_start": bulk(client, args, 0),
             "bulk_after_switch": bulk(client, args, SETTLE),
+            "echo": echo(client, args),
         }
     if args.json:
         json.dump(results, sys.stdout, indent=2)
@@ -221,6 +268,7 @@ def main() -> None:
 
     heads = (
         f"{'first output':>13} {'on relay':>9} {'bulk from start':>16} {'bulk after 8 s idle':>20}"
+        f" {'echo median':>12} {'echo worst':>11}"
     )
     print(f"{'':20} {heads}")
     for client, name in names.items():
@@ -229,7 +277,8 @@ def main() -> None:
             f"{name:20} {cell(r['first']['output_s']):>13} "
             f"{cell(r['first'].get('on_relay_s')):>9} "
             f"{cell(r['bulk_from_start']['mb_s'], ' MB/s'):>16} "
-            f"{cell(r['bulk_after_switch']['mb_s'], ' MB/s'):>20}"
+            f"{cell(r['bulk_after_switch']['mb_s'], ' MB/s'):>20} "
+            f"{cell(r['echo']['median_ms'], ' ms'):>12} {cell(r['echo']['worst_ms'], ' ms'):>11}"
         )
     print(
         "completed bulk runs (start / after idle): "
@@ -240,6 +289,9 @@ def main() -> None:
         )
     )
     print(f"relay switched in {results['relay']['first'].get('switched')} runs")
+    print(
+        "echo samples: " + ", ".join(f"{names[c]} {results[c]['echo']['samples']}" for c in names)
+    )
 
 
 if __name__ == "__main__":
