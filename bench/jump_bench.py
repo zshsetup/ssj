@@ -11,7 +11,7 @@ client runs a command on the backend through the jump host, with no terminal:
   the session has moved to it (it starts on the ssh channel and moves when the leg is up);
 - bulk from the start: `yes | head -c N`, with the login in the time, as a script would run it;
 - echo: how long a line typed takes to come back from `cat`, once the relay carries the session,
-  which is what typing feels like (median and the slowest of 20);
+  which is what typing feels like (median, 95th percentile, and the slowest);
 - bulk after idle: the same after `sleep`, timed from the first byte. The relay has taken over
   by then, so it carries all of it; ssh and ssj over the ssh channel have nothing to switch to
   and show the same test as a reference.
@@ -218,6 +218,7 @@ def echo(client: str, args: argparse.Namespace) -> dict[str, Any]:
     times.sort()
     return {
         "median_ms": median(times),
+        "p95_ms": times[int(len(times) * 0.95)] if times else None,
         "worst_ms": times[-1] if times else None,
         "samples": f"{len(times)}/{args.echo_samples}",
     }
@@ -238,10 +239,13 @@ def main() -> None:
     parser.add_argument("--slow-client", default="wait", choices=["wait", "drop"])
     parser.add_argument("--echo-samples", type=int, default=20)
     parser.add_argument("--echo-only", action="store_true", help="only the echo test")
+    parser.add_argument(
+        "--echo-clients", default="ssh,ssh_tty,stdio,relay", help="the clients of --echo-only"
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     if args.echo_only:
-        for client in ("ssh", "ssh_tty", "stdio", "relay"):
+        for client in args.echo_clients.split(","):
             print(client, echo(client, args))
         return
     results: dict[str, Any] = {}

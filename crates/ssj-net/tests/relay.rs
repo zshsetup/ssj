@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::udp::RecvMeta;
+use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, Endpoint, EndpointConfig, TokioRuntime};
 use ssj_net::relay::{
     Direction, EnvelopeSocket, IDLE, RelayKeys, SECRET_LEN, Sealer, StreamSocket, forward,
@@ -252,4 +252,39 @@ async fn datagrams_that_the_path_reordered_reach_quic_in_order() {
         }
     }
     assert_eq!(seen, [1, 2, 3, 4, 5, 6]);
+}
+
+/// A small datagram goes out twice, so that a single loss costs nothing; a large one goes out once.
+#[tokio::test]
+async fn small_datagrams_are_sent_twice_and_large_ones_once() {
+    let relay = UdpSocket::bind(localhost()).await.unwrap();
+    let keys = RelayKeys::client(&SECRET);
+    let socket = EnvelopeSocket::bind(localhost(), relay.local_addr().unwrap(), &keys).unwrap();
+    let mut poller = socket.clone().create_io_poller();
+    for contents in [&[1u8; 100][..], &[2u8; 1200][..]] {
+        std::future::poll_fn(|cx| poller.as_mut().poll_writable(cx))
+            .await
+            .unwrap();
+        socket
+            .try_send(&Transmit {
+                destination: relay.local_addr().unwrap(),
+                ecn: None,
+                contents,
+                segment_size: None,
+                src_ip: None,
+            })
+            .unwrap();
+    }
+
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    let mut buf = [0u8; 2048];
+    while let Ok(Ok((n, _))) =
+        tokio::time::timeout(Duration::from_millis(300), relay.recv_from(&mut buf)).await
+    {
+        seen.push(buf[..n].to_vec());
+    }
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    let small: Vec<_> = seen.iter().filter(|d| d.len() < 300).collect();
+    assert_eq!(small.len(), 2);
+    assert_eq!(small[0], small[1], "the copy carries the same counter");
 }

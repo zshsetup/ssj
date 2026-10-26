@@ -240,6 +240,19 @@ pub fn widen_buffers(socket: &std::net::UdpSocket) {
 }
 
 const BUFFER: usize = 4 << 20;
+/// Datagrams up to this size (an acknowledgement, a keystroke, a line of output) are sent twice,
+/// the second time a moment later. The counter makes the receiver drop the one that comes second,
+/// and a loss that hit the first one, which on a wireless path often comes alone, costs nothing
+/// instead of a round trip and the time the sender waits before it sends the data again.
+const SMALL: usize = 300;
+const AGAIN: Duration = Duration::from_millis(5);
+
+fn send_again(socket: Arc<UdpSocket>, datagram: Vec<u8>, to: SocketAddr) {
+    tokio::spawn(async move {
+        tokio::time::sleep(AGAIN).await;
+        let _ = socket.send_to(&datagram, to).await;
+    });
+}
 /// Datagrams taken from the socket before they are handed to QUIC.
 const RECEIVE_BATCH: usize = 64;
 
@@ -352,7 +365,11 @@ impl AsyncUdpSocket for EnvelopeSocket {
         }
         SEALED.with_borrow_mut(|datagram| {
             self.sealer.seal(transmit.contents, datagram);
-            self.socket.try_send_to(datagram, self.relay).map(|_| ())
+            let sent = self.socket.try_send_to(datagram, self.relay).map(|_| ());
+            if sent.is_ok() && datagram.len() <= SMALL {
+                send_again(self.socket.clone(), datagram.clone(), self.relay);
+            }
+            sent
         })
     }
 
@@ -659,6 +676,9 @@ where
             sealer.seal(&frame, &mut sealed);
             // a datagram that does not leave is a lost packet
             let _ = udp.send_to(&sealed, to).await;
+            if sealed.len() <= SMALL {
+                send_again(udp.clone(), sealed.clone(), to);
+            }
         }
         Ok::<(), io::Error>(())
     };
