@@ -140,7 +140,7 @@ The options of a command follow its word: `ssj connect -A user@host`, `ssj list 
 | ---------------------------------------- | ---------------------------------------------------------------- |
 | `user@host:2222`, `ssh://user@host:2222` | Port of the ssh server. |
 | `--transport auto\|udp\|stdio` | `auto` is the default; `stdio` is the `ssh` channel. |
-| `--relay none\|auto\|first` | UDP to the first jump host, which passes it on over `ssh`; `none` is the default. |
+| `--relay none\|auto\|first` | UDP to the first jump host, which passes it on over `ssh`; `auto` is the default. |
 | `--ssh-command 'ssh -J jump'` | Replaces `ssh`. |
 | `--server-path ~/bin/ssj-server` | Server file on the host, when it is not in the default place. |
 | `--udp-host 203.0.113.7` | UDP address, when it differs from the host name. |
@@ -294,7 +294,7 @@ your laptop to the first jump host. With `relay`, `ssj` speaks UDP over that str
 host passes the packets on over `ssh`:
 
 ```toml
-relay = "auto"      # "none" (the default), "auto", or "first"
+relay = "auto"      # "none", "auto" (the default), or "first"
 ```
 
 - `auto` uses the relay when the first jump host has `ssj-server`, and does nothing otherwise.
@@ -421,7 +421,7 @@ detach_key = "ctrl-\\"                # a key such as "ctrl-]" that detaches any
 ssh_command = "ssh -J jump"           # replaces ssh
 send_env = []                         # more variables to send, besides TERM and the SendEnv of ssh
 transport = "auto"                    # "auto", "udp", or "stdio"
-relay = "none"                        # "none", "auto", or "first": UDP to the first jump host
+relay = "auto"                        # "none", "auto", or "first": UDP to the first jump host
 auto_attach = false                   # `ssj connect host` joins the only session without a client
 local_echo = "off"                    # "off" or "auto": show typed characters at once
 compress = "off"                      # "off" or "auto": compress while the link is the limit

@@ -246,8 +246,8 @@ culprit. The server offers what it is told to
 ### UDP through a jump host (`relay`)
 
 A host behind a jump host cannot be reached by datagrams, but the path that is usually flaky is
-the one from the client to the first jump host. With `relay = "auto"` or `"first"` (the default is
-`none`) and a `proxyjump` in `ssh -G`, the client speaks UDP to the first jump host, which passes
+the one from the client to the first jump host. With `relay = "auto"` (the default) or `"first"`
+and a `proxyjump` in `ssh -G`, the client speaks UDP to the first jump host, which passes
 the packets to the server over `ssh`. The QUIC connection stays between the client and the
 server, with the pinned certificates of the direct case, so the jump host sees ciphertext only
 and can drop packets, not read or change them. Hosts after the first jump host stay on `ssh`

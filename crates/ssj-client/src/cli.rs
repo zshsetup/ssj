@@ -172,7 +172,7 @@ impl Args {
             server_binary: None,
             detach_key: Some(DEFAULT_DETACH_KEY),
             transport: Transport::Auto,
-            relay: Relay::None,
+            relay: Relay::Auto,
             auto_attach: false,
             forward_agent: false,
             local_echo: LocalEcho::Off,

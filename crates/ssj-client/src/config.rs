@@ -47,7 +47,7 @@ pub struct Config {
     /// "none", "auto", or "first": for a host behind a jump host (ProxyJump), whether UDP goes to
     /// the first jump host, which passes it on over ssh. "auto" needs the server on the jump host
     /// and does nothing without it; "first" asks to install it.
-    #[config(default = "none")]
+    #[config(default = "auto")]
     pub relay: Relay,
     /// `ssj connect host` joins the only session without a client.
     #[config(default = false)]
