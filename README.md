@@ -306,6 +306,10 @@ relay = "auto"      # "none" (the default), "auto", or "first"
   if `ForwardAgent` is on for it. It never asks, so log in once from the jump host to accept the
   host key.
 - If the relay does not come up, the session runs over the `ssh` channel, as before.
+- Packets that a path with jitter reorders are put back in order before they reach QUIC, and
+  small ones (acknowledgements, keystrokes) are sent twice, so that one lost packet does not
+  cost a round trip. On a test link with 3 ms of jitter the bulk speed went from 14 to 40 MB/s,
+  and with 3 % loss the 95th percentile of the echo of a typed line from 250 to 75 ms.
 
 ### Congestion control
 

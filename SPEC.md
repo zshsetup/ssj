@@ -274,11 +274,24 @@ and can drop packets, not read or change them. Hosts after the first jump host s
    address in a pipe.
 1. **The envelope.** Between the client and the relay each datagram has a counter (8 bytes) and
    a tag (16 bytes, HMAC-SHA256 over the direction, the counter and the packet, with the secret).
-   The relay forwards only packets with a valid tag whose counter was not used (a window of 64
+   The relay forwards only packets with a valid tag whose counter was not used (a window of 4096
    behind the newest), and answers to the address of the newest. A client that comes from
    another address (a new network) is followed, and a recorded packet cannot send the answers
    elsewhere. QUIC keeps the 1200-byte packets it starts with (no path MTU search), so the
    envelope stays below the smallest MTU.
+1. **Order and repetition.** A path with jitter reorders packets, and QUIC takes that for loss:
+   it keeps only 64 ranges of received packets for its acknowledgements and drops the oldest
+   ones, so what arrived is reported as lost and sent again, and the throughput of a bulk
+   transfer stops at about 12 MB/s with 3 ms of jitter, whatever the windows. The client therefore
+   puts the packets it receives back in the order of their counters before QUIC sees them
+   (`ssj_net::resequence`): a packet behind a hole waits for the hole to fill, for twice the
+   longest time that a hole took lately, at least 2 ms and at most 40 ms, and then goes on
+   with the hole given up (at most 512 packets wait). A packet that comes after its hole was given
+   up passes at once. Datagrams of up to 300 bytes (acknowledgements, keystrokes, a line of
+   output) are sent twice, the second time 5 ms after the first, by the client and by the relay;
+   the counter is the same, so the receiver drops the one that comes second, and a single loss
+   costs no round trip. On the testbed (`tc netem`, 3 % loss) the 95th percentile of the echo of a
+   typed line fell from 250 ms to 75 ms, and the median did not move.
 1. **Lifetime.** The relay ends when the leg ends (the session ended, or `ssh` died) or when
    it has heard nothing from the client for 8 hours. After that the client finds the port closed
    and the `ssh` channel carries the session as without a relay. The relay tier is first in the
@@ -687,10 +700,15 @@ What the measurements changed (each found with `sample`, CPU times from `ps`, an
   plain text without stepping through it.
 - The QUIC endpoints ask the peer to acknowledge every eighth packet (ACK frequency extension)
   and not every second one, which saved about 10 percent on macOS and nothing for latency.
-- QUIC may hold only `live_backlog` bytes unacknowledged (`send_window`). Without it QUIC took
-  the output as fast as it came, up to the whole receive window of the client, so a slow link
-  had megabytes queued below the buffer of the server. Nothing could be skipped or compressed
-  there, and compression sent exactly as many bytes as no compression.
+- The server lets QUIC hold unacknowledged output of at most twice the congestion window, and at
+  least `live_backlog` (the window is read from QUIC every 50 ms; QUIC itself may hold 16 MiB).
+  Without a limit QUIC took the output as fast as it came, up to the whole receive window of the
+  client, so a slow link had megabytes queued below the buffer of the server. Nothing could be
+  skipped or compressed there, and compression sent exactly as many bytes as no compression.
+  A fixed limit of `live_backlog` was the ceiling of a link with jitter or a long round trip:
+  with 1 MiB, 60 ms and some reordering the throughput stayed at 4.7 MB/s however fast the link.
+- The client acknowledges its output once 64 KiB are behind, even when more frames wait; before,
+  it did so only when the reader was empty, which a bulk transfer never is.
 
 Nothing is gated yet.
 
@@ -699,7 +717,11 @@ Nothing is gated yet.
 The default is `auto` (`ssj_net::adaptive`): a controller that holds a CUBIC and a BBR of
 `quinn` (initial window 256 KiB each), feeds both with every event, and lets one send. It starts
 with CUBIC. A loss (not an ECN mark) counts as random when the smoothed round-trip time is at most
-15 percent above the smallest one plus 2 ms, so no queue has built up in front of it; four of them
+15 percent above the lowest smoothed time of the last 30 seconds, plus 2 ms and the spread of
+the round-trip time, so no queue has built up in front of it (the lowest time that ever was
+measured is no floor on a path with jitter: it is one lucky sample far below the usual time). A
+random loss is not passed on to CUBIC or to BBR: CUBIC that cut its window for it needed seconds
+to grow back, and BBR went into recovery and fell to its smallest window. Four of them
 within 10 seconds move the connection to BBR, and 30 seconds without any loss move it back (a
 loss caused by a queue never moves it, since CUBIC is the fair one there). `congestion = "bbr"`
 or `"cubic"` in either config file, or `--congestion`, forces one. The client
@@ -777,9 +799,9 @@ a build log or a pasted text shrinks to a fifth or less.
   chunk is at least 1 KiB (a terminal program gets at most 4 KiB per read on Linux), and the result
   is at least an eighth smaller. Typing stays plain because no backlog builds. The server counts what
   waits and what was sent without an acknowledgement of the client, the same for every transport.
-  For QUIC the server also limits what the transport may hold unacknowledged to `live_backlog`
-  (1 MiB by default; `send_window`). The throughput ceiling is that window divided by the round
-  trip time (10 MB/s at 100 ms), so a user on a long fast link raises `live_backlog`. Otherwise QUIC would take all output at once, up to the receive window of the
+  For QUIC the server also limits what the transport may hold unacknowledged to twice the
+  congestion window, and at least `live_backlog` (1 MiB by default). Otherwise QUIC would take
+  all output at once, up to the receive window of the
   client, and nothing would ever wait in the buffer of the server, where it can be compressed or
   skipped (this was found when `--compress auto` sent as many bytes as no compression). A fast link never
   pays the CPU time, and typing is never compressed, because a keystroke is a few bytes and no
