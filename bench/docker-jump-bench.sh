@@ -55,10 +55,12 @@ docker network create "$name-flaky" >/dev/null
 docker network create "$name-clean" >/dev/null
 
 # the tools are in an image of their own, which is built once
-base=ssjbench-base3:$(echo "$IMAGE" | tr '/:' '--')
+base=ssjbench-base4:$(echo "$IMAGE" | tr '/:' '--')
 if ! docker image inspect "$base" >/dev/null 2>&1; then
-    # the tc of the distribution is too old for `seed` (it came with iproute2 6.3)
-    printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq iproute2 ethtool openssh-server openssh-client python3 iperf3 socat build-essential bison flex pkg-config curl xz-utils && curl -fsSL https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-6.15.0.tar.xz | tar -xJ -C /tmp && cd /tmp/iproute2-6.15.0 && ./configure >/dev/null && make -j4 >/dev/null 2>&1 && install -m 755 tc/tc /usr/local/sbin/tc && cd / && rm -rf /tmp/iproute2-6.15.0 /var/lib/apt/lists/*\n' "$IMAGE" |
+    # the tc of the distribution is too old for `seed` (it came with iproute2 6.3); the new one looks
+    # for its tables of distributions in /usr/lib/tc, where the distribution has them elsewhere
+    # shellcheck disable=SC2016 # the $(...) is for the shell of the build, not this one
+    printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq iproute2 ethtool openssh-server openssh-client python3 iperf3 socat build-essential bison flex pkg-config curl xz-utils && curl -fsSL https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-6.15.0.tar.xz | tar -xJ -C /tmp && cd /tmp/iproute2-6.15.0 && ./configure >/dev/null && make -j4 >/dev/null 2>&1 && install -m 755 tc/tc /usr/local/sbin/tc && ln -s $(dirname $(find /usr/lib -name normal.dist | head -1)) /usr/lib/tc && cd / && rm -rf /tmp/iproute2-6.15.0 /var/lib/apt/lists/*\n' "$IMAGE" |
         docker build -q -t "$base" - >/dev/null
 fi
 IMAGE=$base
