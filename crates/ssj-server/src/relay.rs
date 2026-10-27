@@ -212,9 +212,10 @@ async fn relay(
     // the command talks to a person if it is let: it must not read a terminal, and it must not
     // block on a full pipe of error output.
     let stderr = Arc::new(Mutex::new(Vec::new()));
+    let mut stderr_done = None;
     if let Some(mut pipe) = leg.stderr.take() {
         let kept = stderr.clone();
-        tokio::spawn(async move {
+        stderr_done = Some(tokio::spawn(async move {
             let mut chunk = [0u8; 1024];
             while let Ok(n) = pipe.read(&mut chunk).await {
                 if n == 0 {
@@ -224,7 +225,7 @@ async fn relay(
                 let room = STDERR_KEPT.saturating_sub(kept.len());
                 kept.extend_from_slice(&chunk[..n.min(room)]);
             }
-        });
+        }));
     }
     let (Some(input), Some(mut output)) = (leg.stdin.take(), leg.stdout.take()) else {
         return fail("the command has no pipes");
@@ -250,6 +251,10 @@ async fn relay(
     })
     .await;
     let Ok(Some(rest)) = started else {
+        // the command ended: what it wrote to its error output may still be on the way
+        if let Some(done) = stderr_done {
+            let _ = tokio::time::timeout(Duration::from_secs(1), done).await;
+        }
         let reason = {
             let text = stderr.lock().expect("not poisoned");
             match sanitize(&text, SHOWN).trim() {
