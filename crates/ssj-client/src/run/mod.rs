@@ -22,7 +22,6 @@ use tokio::sync::mpsc;
 
 use crate::cli::{Args, Command};
 use crate::config::Config;
-use crate::install::install;
 use crate::netwatch::Cause;
 use crate::status::Status;
 use crate::terminal::exit_on_interrupt;
@@ -258,9 +257,11 @@ async fn session(mut args: Args) -> u8 {
         Command::Kill(ids) => kill_session(&args, ids).await,
         Command::Detach(ids) => send_order(&args, ids, &DETACH).await,
         Command::Edit => crate::edit::run(&args).await,
-        Command::Install => match install(&args).await {
-            Ok(path) => {
-                println!("installed {path}");
+        Command::Install => match connect::install_everywhere(&args).await {
+            Ok(done) => {
+                for line in done {
+                    println!("installed {line}");
+                }
                 0
             }
             Err(message) => {

@@ -438,6 +438,26 @@ async fn relay_plan(args: &Args, target: Option<&SshConfig>) -> Option<RelayPlan
     })
 }
 
+/// The command `install`: puts the server on the destination, and on the first jump host as well
+/// when a relay would run there. Returns what was installed, and where.
+pub(super) async fn install_everywhere(args: &Args) -> Result<Vec<String>, String> {
+    let mut done = vec![format!("{}: {}", args.destination, install(args).await?)];
+    let ssh = crate::tunnel::ssh_config(args).await;
+    if let Some(plan) = relay_plan(args, ssh.as_ref()).await {
+        let mut jump = args.clone();
+        jump.destination.clone_from(&plan.hop.destination);
+        jump.ssh_port = plan.hop.port;
+        let path = install(&jump).await.map_err(|e| {
+            format!(
+                "{} was installed, but {}: {e}",
+                done[0], plan.hop.destination
+            )
+        })?;
+        done.push(format!("{}: {path}", plan.hop.destination));
+    }
+    Ok(done)
+}
+
 /// Completes the relay once the session is known: installs the server on the jump host if that is
 /// the policy, tells the relay how to reach the destination, and returns the UDP address and keys
 /// for the tier. `None` leaves the session to the `ssh` channel.

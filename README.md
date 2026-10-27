@@ -71,7 +71,8 @@ cargo install --path crates/ssj-server
 ssj install user@host
 ```
 
-The server file lands on the host here:
+With a jump host in front of `user@host`, the relay needs the server there as well, and the command
+installs it on the first jump host too. The server file lands on the host here:
 
 ```text
 ~/.local/share/ssj/bin/
@@ -127,7 +128,7 @@ When the server is missing, `ssj connect user@host` offers to install it, as set
 | `ssj kill [-f] user@host [ID...]` | Ends one or more sessions. `ID` is an id or a name. Without an `ID` the only session is ended after a question (`-f` skips it), and several sessions get a menu. |
 | `ssj detach user@host [ID...]` | Makes the clients leave; the sessions keep running. |
 | `ssj connect user@host make -j8` | Runs a command in a session that survives jumps (see below). Every word after the host belongs to the command, options included, as with `ssh`; `--` before the command is accepted but not needed. |
-| `ssj install user@host` | Puts the server file on the host (downloads it, or uploads `--server-binary`). |
+| `ssj install user@host` | Puts the server file on the host, and on the first jump host when the relay would run there (downloads it, or uploads `--server-binary`; `--relay none` skips the jump host). |
 | `ssj edit` | Edits `client.toml` in `$EDITOR`. |
 | `ssj edit user@host` | Edits `server.toml` on the host in `$EDITOR`. |
 
