@@ -709,6 +709,10 @@ What the measurements changed (each found with `sample`, CPU times from `ps`, an
   with 1 MiB, 60 ms and some reordering the throughput stayed at 4.7 MB/s however fast the link.
 - The client acknowledges its output once 64 KiB are behind, even when more frames wait; before,
   it did so only when the reader was empty, which a bulk transfer never is.
+- On a stream (the channel of an `ssh` session) the server lets 1 MiB go out unacknowledged.
+  `ssh` stalls at 2 MiB in a channel, and with the whole replay buffer (4 MiB) in flight the
+  output queued in its pipes and sockets delayed the acknowledgements: 10 MB took 0.45 s, against
+  0.2 s with 1 MiB (plain `ssh` 0.14 s). Between 1.5 and 2 MiB the time rises to the old value.
 
 Nothing is gated yet.
 

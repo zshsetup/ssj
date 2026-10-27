@@ -30,6 +30,11 @@ use crate::control_socket::SocketFile;
 /// Output is compressed only while at least this many bytes are not acknowledged by the client
 /// (waiting or on the way), which means that the link is slower than the shell.
 const COMPRESS_BACKLOG: u64 = 256 * 1024;
+/// The most output that goes out unacknowledged over a stream, such as the channel of an `ssh`
+/// session. `ssh` holds 2 MiB in a channel and stalls at that, and the output that waits in its
+/// pipes and sockets delays the acknowledgements: 10 MB took 0.45 s with the whole replay buffer
+/// in flight, and 0.2 s with 1 MiB.
+const STREAM_INFLIGHT: u64 = 1024 * 1024;
 /// Chunks shorter than this are not worth compressing.
 const COMPRESS_MIN_CHUNK: usize = 1024;
 /// How long an acknowledgement of input waits for output to go with it. It matters little when it
@@ -786,13 +791,14 @@ async fn wait_until(deadline: Option<Instant>) {
 /// at the speed of its link, and only what the shell writes afterwards is limited to `live` bytes.
 /// Whether more output may go out: the transport can carry about twice its congestion window
 /// without an acknowledgement (the room for what is lost and reordered), and `live_backlog` at
-/// least, so Ctrl-C does not wait behind more than that. A connection without a window has a
-/// transport that limits itself.
+/// least, so Ctrl-C does not wait behind more than that. A stream has no window and gets
+/// `STREAM_INFLIGHT`.
 fn room_to_send(a: &Active, output: &ReplayBuffer, config: &SessionConfig) -> bool {
-    let Some(window) = &a.window else {
-        return true;
-    };
-    let allowed = (2 * window.load(Ordering::Relaxed)).max(config.live_backlog as u64);
+    let window = a
+        .window
+        .as_ref()
+        .map_or(STREAM_INFLIGHT, |w| 2 * w.load(Ordering::Relaxed));
+    let allowed = window.max(config.live_backlog as u64);
     a.output_sent.saturating_sub(output.start()) < allowed
 }
 
