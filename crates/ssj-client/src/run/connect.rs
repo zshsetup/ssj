@@ -537,11 +537,7 @@ async fn finish_relay(
                 vlog!(1, "the relay on {hop} is up");
                 tell.notify_one();
             }
-            Err(mut text) => {
-                // a server of 0.2.0 or older does not know the option of the leg
-                if text.contains("unexpected argument '--datagrams'") {
-                    text.push_str(" (the server on the destination is too old for the relay: run `ssj install` for it)");
-                }
+            Err(text) => {
                 vlog!(1, "the relay on {hop} did not come up: {text}");
                 if loud && !quiet {
                     eprintln!("ssj: no relay through {hop}: {text}");
