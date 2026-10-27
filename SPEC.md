@@ -506,9 +506,8 @@ redraw.
   host and offers only the names of its sessions. Without a host (`--name`) it offers the names of
   all hosts with a list.
 - A release publishes one archive per client platform, `ssj-<version>-<target>.tar.gz`, that holds
-  a directory with `ssj`, `ssj.1`, `completions/`, `README.md`, `LICENSE`, and a `SHA256SUMS` of
-  the client. The release also lists the server files `ssj-server-<target>` of all five builds as
-  separate assets, which `ssj install` downloads, a `SHA256SUMS` of everything, and the build
+  a directory with `ssj`, `ssj.1`, `completions/`, `README.md`, and `LICENSE`. The release
+  also lists the server files `ssj-server-<target>` of all five builds as separate assets, which `ssj install` downloads, a `SHA256SUMS` of everything, and the build
   provenance attestation for all of them.
 
 ### Benchmark

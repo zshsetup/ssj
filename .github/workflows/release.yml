@@ -5,6 +5,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+env:
+  BIN_NAME: ssj
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -122,11 +124,10 @@ jobs:
             cp assets/ssj.1 "pack/$name/"
             cp -r assets/completions "pack/$name/"
             cp README.md LICENSE "pack/$name/"
-            (cd "pack/$name" && sha256sum ssj > SHA256SUMS)
             tar -C pack -czf "out/${name}.tar.gz" "$name"
           done
           cp dist/ssj-server-* out/
-      - name: Write the checksums
+      - name: Write checksums
         run: cd out && sha256sum * > SHA256SUMS
       - name: Attest the provenance of the files
         uses: actions/attest-build-provenance@v2

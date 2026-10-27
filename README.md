@@ -47,7 +47,6 @@ ssj-VERSION-TARGET/
 │   ├── ssj.bash               # Bash: `source` it from ~/.bashrc
 │   ├── _ssj                   # Zsh: a directory in your fpath
 │   └── ssj.fish               # Fish: ~/.config/fish/completions/
-├── SHA256SUMS                 # checksum of `ssj`
 ├── README.md
 └── LICENSE
 ```
