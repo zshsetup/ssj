@@ -715,6 +715,32 @@ What the measurements changed (each found with `sample`, CPU times from `ps`, an
 
 Nothing is gated yet.
 
+#### Where it is still behind (`relay`)
+
+Measured in the container benchmark (`bench/docker-jump-bench.sh`) and on two real hosts. Each
+item says what was seen and what could be done; none is a correctness problem.
+
+- On a clean, fast link (no delay) the relay reaches 40 to 60 MB/s and `ssh -J` 60 to 80 MB/s.
+  The relay socket makes one system call for each datagram (`try_recv_from`, `send_to`, one
+  receive segment). Batching (`recvmmsg`, `sendmmsg`) would help only above about 50 MB/s.
+- The relay is switched in 0.5 s after the start on a clean link and 2 to 3 s on a link with
+  jitter, because the login to the destination through the jump host needs the session first.
+  Until then the output goes over the channel of `ssh`.
+- The replay buffer (`replay_capacity`, 4 MiB) limits the output in flight to 4 MiB, which is
+  20 MB/s at a round trip of 200 ms. No path that was measured came near it. It could follow the
+  bandwidth-delay product of the connection.
+- A stream (the channel of `ssh`) carries 1 MiB in flight, 5 MB/s at 200 ms. `ssh` itself stops at
+  2 MiB there, so only a larger window than its own would be faster.
+- The direct UDP path (no jump host) has no envelope counters, so it has neither the
+  resequencing nor the repeated small datagrams. On a path that reorders at bulk rates it can
+  lose the throughput that the relay keeps.
+- QUIC doubles the retransmission timeout up to 2^16 times, and the stalls of 10 s and more on a
+  burst-loss link may come from that. The cap is a two-line change in `quinn-proto` but needs a
+  patched copy of the crate, so it waits for evidence (or an option upstream).
+- The median echo over the relay on a real path (86 ms against 50 ms for the channel of `ssh`,
+  20 samples) may be the repeated small datagrams and the resequencing wait (2 to 40 ms). Not
+  investigated; the worst case and the 95th percentile are better than `ssh -J` on a lossy link.
+
 #### Congestion control (`congestion`)
 
 The default is `auto` (`ssj_net::adaptive`): a controller that holds a CUBIC and a BBR of
