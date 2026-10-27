@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Session survives jumps: a roaming remote shell over QUIC"
 repository = "https://github.com/zshsetup/ssj"
@@ -34,11 +34,11 @@ serde_bytes = "0.11.19"
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 socket2 = "0.6.5"
-ssj-client = { path = "crates/ssj-client", version = "0.2.1" }
-ssj-config = { path = "crates/ssj-config", version = "0.2.1" }
-ssj-net = { path = "crates/ssj-net", version = "0.2.1" }
-ssj-proto = { path = "crates/ssj-proto", version = "0.2.1" }
-ssj-server = { path = "crates/ssj-server", version = "0.2.1" }
+ssj-client = { path = "crates/ssj-client", version = "0.2.2" }
+ssj-config = { path = "crates/ssj-config", version = "0.2.2" }
+ssj-net = { path = "crates/ssj-net", version = "0.2.2" }
+ssj-proto = { path = "crates/ssj-proto", version = "0.2.2" }
+ssj-server = { path = "crates/ssj-server", version = "0.2.2" }
 system-configuration = "0.8.0"
 tempfile = "3.27.0"
 tokio = "1.53.3"

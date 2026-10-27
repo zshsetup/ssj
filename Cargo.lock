@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "ssj-assets"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "ssj-client"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "confique",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "ssj-config"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "confique",
  "toml",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "ssj-net"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "quinn",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "ssj-proto"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "hex",
  "postcard",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "ssj-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "confique",
