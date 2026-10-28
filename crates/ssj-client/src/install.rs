@@ -140,6 +140,31 @@ if [ -n "$was" ]; then
 fi
 echo "SSJ INSTALLED $dir/ssj-server-p__PROTOCOL__""#;
 
+/// Runs on the host: says `SSJ HAVE <path>` if the installed file has the digest in `$1`.
+const CHECK_SCRIPT: &str = r#"f="${XDG_DATA_HOME:-$HOME/.local/share}/ssj/bin/ssj-server-p__PROTOCOL__"
+[ -f "$f" ] || exit 0
+if command -v sha256sum >/dev/null 2>&1; then
+  got=$(sha256sum "$f" | cut -d' ' -f1)
+elif command -v shasum >/dev/null 2>&1; then
+  got=$(shasum -a 256 "$f" | cut -d' ' -f1)
+else
+  exit 0
+fi
+[ "$got" = "$1" ] && echo "SSJ HAVE $f"
+exit 0"#;
+
+/// The path of the installed server file if the host has the file with `digest` already.
+async fn installed_digest(args: &Args, digest: &str) -> Result<Option<String>, String> {
+    let script = CHECK_SCRIPT.replace("__PROTOCOL__", &ssj_proto::PROTOCOL.to_string());
+    let remote =
+        run_remote_command(args, &sh_command(&script, &[digest.to_owned()]), Vec::new()).await?;
+    Ok(remote
+        .stdout
+        .split(|b| *b == b'\n')
+        .find_map(|line| line.strip_prefix(b"SSJ HAVE "))
+        .map(|path| sanitize(path, 300)))
+}
+
 /// Uploads the server file for the host and returns the path it was installed at.
 pub async fn install(args: &Args) -> Result<String, String> {
     // a wrong address is found before the host is asked for anything.
@@ -148,8 +173,9 @@ pub async fn install(args: &Args) -> Result<String, String> {
     }
     let target = detect_target(args).await?;
     vlog!(1, "the host runs {}", target.triple());
-    // the file named by the user, or else the release of the same version.
-    let binary = if let Some(file) = &args.server_binary {
+    // the file named by the user, or else the release of the same version. The digest is known
+    // before anything is transferred, so a host that has the file already gets nothing.
+    let (digest, local) = if let Some(file) = &args.server_binary {
         let size = std::fs::metadata(file)
             .map_err(|e| format!("cannot read {}: {e}", file.display()))?
             .len();
@@ -159,13 +185,24 @@ pub async fn install(args: &Args) -> Result<String, String> {
                 file.display()
             ));
         }
-        std::fs::read(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?
+        let bytes =
+            std::fs::read(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+        (sha256_hex(&bytes), Some(bytes))
     } else {
-        vlog!(1, "downloading the server file from the release");
-        crate::download::server_file(args, target).await?
+        (crate::download::release_digest(args, target).await?, None)
     };
-
-    let digest = sha256_hex(&binary);
+    let script = INSTALL_SCRIPT.replace("__PROTOCOL__", &ssj_proto::PROTOCOL.to_string());
+    if let Some(path) = installed_digest(args, &digest).await? {
+        vlog!(1, "the host has the file already (SHA-256 {digest})");
+        return Ok(format!("{path} (already up to date)"));
+    }
+    let binary = match local {
+        Some(bytes) => bytes,
+        None => {
+            vlog!(1, "downloading the server file from the release");
+            crate::download::server_file(args, target, &digest).await?
+        }
+    };
     vlog!(
         1,
         "uploading {} bytes of the server (SHA-256 {digest})",
@@ -174,7 +211,6 @@ pub async fn install(args: &Args) -> Result<String, String> {
 
     let mut stdin = format!("{digest}\n").into_bytes();
     stdin.extend_from_slice(&binary);
-    let script = INSTALL_SCRIPT.replace("__PROTOCOL__", &ssj_proto::PROTOCOL.to_string());
     let remote = run_remote_command(args, &sh_command(&script, &[]), stdin).await?;
     if !remote.status.success() {
         return Err(format!(

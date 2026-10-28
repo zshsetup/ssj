@@ -72,7 +72,8 @@ ssj install user@host
 ```
 
 With a jump host in front of `user@host`, the relay needs the server there as well, and the command
-installs it on the first jump host too. The server file lands on the host here:
+installs it on the first jump host too. A host that has the file already (the same SHA-256 as in
+the `SHA256SUMS` of the release, or as `--server-binary`) gets no download and no upload. The server file lands on the host here:
 
 ```text
 ~/.local/share/ssj/bin/

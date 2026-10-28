@@ -1071,13 +1071,36 @@ fn install_uploads_checks_and_makes_the_default_path_work() {
         .collect();
     assert_eq!(names, [format!("ssj-server-p{}", ssj_proto::PROTOCOL)]);
 
-    // an installed file of the same protocol is replaced, and the output says which one.
-    let again = host.ssj(
+    // the same file again is not uploaded.
+    let same = host.ssj(
         &ssh,
         &[
             "install",
             "--server-binary",
             dir.to_str().unwrap(),
+            "user@localhost",
+        ],
+        "",
+    );
+    assert!(same.status.success(), "{}", text(&same.stderr));
+    assert!(
+        text(&same.stdout).contains("(already up to date)"),
+        "{}",
+        text(&same.stdout)
+    );
+
+    // a different file of the same protocol replaces it, and the output says which one. Bytes
+    // after the end of the executable do not change what it does.
+    let other = host.data.join("other-server");
+    let mut bytes = std::fs::read(&dir).unwrap();
+    bytes.push(0);
+    std::fs::write(&other, bytes).unwrap();
+    let again = host.ssj(
+        &ssh,
+        &[
+            "install",
+            "--server-binary",
+            other.to_str().unwrap(),
             "user@localhost",
         ],
         "",

@@ -68,23 +68,33 @@ fn fetch(url: &str, limit: u64) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("cannot download {url}: {e}"))
 }
 
-/// Downloads the server file for `target` and checks it against the checksums of the release.
-pub async fn server_file(args: &Args, target: Target) -> Result<Vec<u8>, String> {
-    let base = base_url(args)?;
-    let name = format!("ssj-server-{}", target.triple());
-    let (file_url, sums_url) = (format!("{base}/{name}"), format!("{base}/{SUMS_FILE}"));
-    eprintln!("ssj: downloading {file_url}");
+/// The name of the server file for `target` in a release.
+pub fn file_name(target: Target) -> String {
+    format!("ssj-server-{}", target.triple())
+}
+
+/// The digest that the checksums of the release list for the server file of `target`. Only the
+/// small list is downloaded.
+pub async fn release_digest(args: &Args, target: Target) -> Result<String, String> {
+    let sums_url = format!("{}/{SUMS_FILE}", base_url(args)?);
     vlog!(1, "checksums from {sums_url}");
-    let (binary, sums) = tokio::task::spawn_blocking(move || {
-        let sums = fetch(&sums_url, MAX_SUMS)?;
-        let binary = fetch(&file_url, MAX_BINARY)?;
-        Ok::<_, String>((binary, sums))
-    })
-    .await
-    .map_err(|e| format!("the download failed: {e}"))??;
-    let sums = String::from_utf8_lossy(&sums);
-    let wanted = digest_for(&sums, &name)
-        .ok_or_else(|| format!("{SUMS_FILE} of the release has no entry for {name}"))?;
+    let sums = tokio::task::spawn_blocking(move || fetch(&sums_url, MAX_SUMS))
+        .await
+        .map_err(|e| format!("the download failed: {e}"))??;
+    let name = file_name(target);
+    digest_for(&String::from_utf8_lossy(&sums), &name)
+        .ok_or_else(|| format!("{SUMS_FILE} of the release has no entry for {name}"))
+}
+
+/// Downloads the server file for `target` and checks it against `wanted`, its digest from the
+/// checksums of the release.
+pub async fn server_file(args: &Args, target: Target, wanted: &str) -> Result<Vec<u8>, String> {
+    let name = file_name(target);
+    let file_url = format!("{}/{name}", base_url(args)?);
+    eprintln!("ssj: downloading {file_url}");
+    let binary = tokio::task::spawn_blocking(move || fetch(&file_url, MAX_BINARY))
+        .await
+        .map_err(|e| format!("the download failed: {e}"))??;
     if binary.is_empty() || sha256_hex(&binary) != wanted {
         return Err(format!(
             "the downloaded {name} does not match {SUMS_FILE} of the release"
