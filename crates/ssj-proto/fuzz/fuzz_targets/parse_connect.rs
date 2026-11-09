@@ -5,12 +5,12 @@
 use libfuzzer_sys::fuzz_target;
 use ssj_proto::bootstrap::{format_pin, parse_connect, parse_pin, sanitize, format_connect};
 
-// A parsed line must be present in the input exactly as the client would format it.
+// A parsed line must parse back to the same value once formatted. The text itself may differ, since
+// the port of TCP from earlier servers is read and dropped.
 fuzz_target!(|data: &[u8]| {
     if let Ok(Some(connect)) = parse_connect(data) {
         let line = format_connect(&connect);
-        let line = line.trim_end().as_bytes();
-        assert!(data.windows(line.len()).any(|w| w == line));
+        assert_eq!(parse_connect(line.as_bytes()), Ok(Some(connect)));
     }
     if let Ok(pin) = parse_pin(data) {
         let line = format_pin(&pin);
