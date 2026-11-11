@@ -454,7 +454,7 @@ fn client_on_a_terminal_passes_the_window_size_and_exits_without_hanging() {
     assert_eq!(code, Some(7));
     // without the message of the day, these lines say when the session begins and ends.
     assert!(
-        seen.contains("[started session ") && seen.contains(" on me@localhost over udp]"),
+        seen.contains("[started session ") && seen.contains(" on me@localhost]\r\n"),
         "{seen:?}"
     );
     assert!(
@@ -468,7 +468,7 @@ fn the_first_line_names_the_session_when_it_has_a_name() {
     let (seen, code) = terminal_session(&["--name", "work"]);
     assert_eq!(code, Some(7));
     assert!(
-        seen.contains("[started session work (") && seen.contains(") on me@localhost over udp]"),
+        seen.contains("[started session work (") && seen.contains(") on me@localhost]\r\n"),
         "{seen:?}"
     );
 }

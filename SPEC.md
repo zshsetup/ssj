@@ -1031,8 +1031,9 @@ Leaving (the shell keeps running):
   `ctrl-M`) are refused, and `ctrl-[` (Escape) is not accepted, since every line and key sequence
   uses them. Typed bytes before the key in the same read are sent first.
 - The client prints two more lines, so that the start and the end of a session are visible
-  without the message of the day of a login: `[started session <NAME> (<ID>) on <DESTINATION> over <TRANSPORT>]`
-  once the first connection is up. The name and the brackets around the id are left out when the
+  without the message of the day of a login: `[started session <NAME> (<ID>) on <DESTINATION>]`
+  once the first connection is up. It names no transport: the first connection is often the `ssh`
+  channel, which hands over to QUIC a second later (see Transports), and `-v` logs both. The name and the brackets around the id are left out when the
   session has no name the user gave. The first word is `started` for a session that the server made for this client (its `CONNECT`
   line says `new`) and `attached to` for one that ran. The line goes in front of the output of the session,
   and `[disconnected from <DESTINATION>]` after the shell has ended. The first goes to the

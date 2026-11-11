@@ -356,10 +356,9 @@ impl Client {
         let session = name
             .as_ref()
             .map_or_else(|| id.to_owned(), |name| format!("{name} ({id})"));
-        let line = format!(
-            "[{what} {session} on {destination} over {}]\r\n",
-            self.params.tiers[self.current].name()
-        );
+        // no transport: the first connection is often the `ssh` channel, which hands over to QUIC
+        // a moment later, and `-v` tells both.
+        let line = format!("[{what} {session} on {destination}]\r\n");
         let _ = self.io.output.write_all(line.as_bytes()).await;
         let _ = self.io.output.flush().await;
     }
