@@ -478,6 +478,7 @@ fn start_client_inner(
             socket: None,
         },
         tiers,
+        held_stream: false,
         attempt_timeout,
         first_attempt_timeout: attempt_timeout,
         stream_dead_after,

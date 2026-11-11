@@ -237,6 +237,11 @@ impl Client {
     /// that opens wins: QUIC gets a head start of [`RACE_STAGGER`] when it is the transport in use,
     /// and the stream starts at once when the session is on it already, so that a network where
     /// UDP does not work costs a fraction of a second and not the whole timeout of QUIC.
+    ///
+    /// The first connection starts the stream at once too when it runs over the `ssh` that
+    /// started the server: it needs no login and opens a round trip or two before QUIC (the
+    /// retry and the handshake). If it wins, the QUIC attempt is kept in [`Client::outrun`], and
+    /// the session moves to QUIC when it opens.
     async fn race(&mut self) -> Result<(Link, usize), String> {
         let racing = self.params.tiers.len() > 1 && self.params.tiers[0].is_quic();
         if !racing {
@@ -246,7 +251,8 @@ impl Client {
         let (primary, secondary) = (0, self.current.max(1));
         // a relay cannot be up before the session is: the stream has no reason to wait for it
         let relay_first = !self.linked_once && matches!(self.params.tiers[0], Tier::Relay { .. });
-        let stagger = if self.current > 0 || relay_first {
+        let held_first = !self.linked_once && self.params.held_stream;
+        let stagger = if self.current > 0 || relay_first || held_first {
             Duration::ZERO
         } else {
             RACE_STAGGER
@@ -290,7 +296,12 @@ impl Client {
                 }
                 result = async { second.as_mut().expect("guarded").await }, if second.is_some() => {
                     match result {
-                        Ok(link) => return Ok((link, secondary)),
+                        Ok(link) => {
+                            if held_first {
+                                self.outrun = first.take();
+                            }
+                            return Ok((link, secondary));
+                        }
                         Err(error) => {
                             vlog!(1, "{error}");
                             errors.push(error);

@@ -155,6 +155,9 @@ struct Client {
     current: usize,
     /// A connection that opened by itself and is to carry the session, with its tier.
     prepared: Option<(Link, usize)>,
+    /// The QUIC attempt of a race that the stream won. It keeps opening, and the session moves
+    /// to it when it does.
+    outrun: Option<LinkFuture>,
     /// The link that a switch leaves, held until the server has answered on the new one. With
     /// nobody attached for a moment the server would treat the shell as unattended and forget its
     /// output, and a transfer would lose what it wrote meanwhile.
@@ -204,6 +207,7 @@ pub async fn run_session(params: Params, io: Io) -> Result<Finished, String> {
         params,
         current: 0,
         prepared: None,
+        outrun: None,
         retiring: None,
         failures: 0,
         linked_once: false,

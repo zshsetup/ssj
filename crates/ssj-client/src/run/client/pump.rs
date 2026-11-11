@@ -9,7 +9,7 @@ use ssj_proto::{ClientFrame, ServerFrame, WindowSize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::error::Elapsed;
-use tokio::time::{interval, sleep_until, timeout};
+use tokio::time::{interval, sleep, sleep_until, timeout};
 
 use super::{ACK_BULK, Client, Link, Pumped, Upgrade, exit_code, next_cause, redraw};
 use crate::agent::Forward;
@@ -23,6 +23,11 @@ use crate::vlog;
 const REDRAW_AFTER_LOG: Duration = Duration::from_millis(400);
 /// Time QUIC gets to open on a new network while the session runs over a stream transport.
 const UPGRADE_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Time a session that began on the `ssh` channel stays there before it moves to QUIC. A move
+/// stops the output for a round trip, and on Wi-Fi the first packets of a new QUIC connection can
+/// sit in a buffer of the access point for a quarter of a second, though QUIC already counts as
+/// open: a short command ends on the stream first, and a longer one moves when it is idle anyway.
+const MOVE_TO_QUIC_AFTER: Duration = Duration::from_secs(1);
 /// A resize is sent when no newer one has come for this long.
 const RESIZE_QUIET: Duration = Duration::from_millis(50);
 const PING_EVERY: Duration = Duration::from_secs(1);
@@ -92,7 +97,20 @@ impl Client {
             probed_at: None,
             notices: 0,
             resizes: Debounce::new(RESIZE_QUIET),
-            upgrade: None,
+            // QUIC that the stream outran on the first connection keeps opening, and the session
+            // moves to it after a moment on the stream (see [`MOVE_TO_QUIC_AFTER`]).
+            upgrade: self.outrun.take().and_then(|opening| {
+                (self.current != 0).then(|| {
+                    vlog!(
+                        1,
+                        "QUIC is still opening: the session moves to it after {MOVE_TO_QUIC_AFTER:?}"
+                    );
+                    Box::pin(async move {
+                        sleep(MOVE_TO_QUIC_AFTER).await;
+                        timeout(UPGRADE_TIMEOUT, opening).await
+                    }) as Upgrade
+                })
+            }),
             spares: JoinSet::new(),
             spare_not_before: Instant::now(),
             redraw_at: None,
@@ -411,10 +429,10 @@ impl Client {
                 vlog!(1, "QUIC works: moving the session to it");
                 return Some(Pumped::Switch(better, 0));
             }
-            Ok(Err(error)) => vlog!(1, "QUIC does not work on the new network: {error}"),
+            Ok(Err(error)) => vlog!(1, "QUIC does not work: {error}"),
             Err(_) => vlog!(
                 1,
-                "QUIC has no answer on the new network: staying on {}",
+                "QUIC has no answer: staying on {}",
                 self.params.tiers[self.current].name()
             ),
         }

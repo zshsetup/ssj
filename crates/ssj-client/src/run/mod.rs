@@ -117,6 +117,9 @@ pub struct Params {
     pub connect: Connect,
     /// The ways to reach the server, in the order to try them.
     pub tiers: Vec<Tier>,
+    /// Whether the first stream runs over the `ssh` that started the server, which costs no new
+    /// login: the race of the first connection then starts it beside QUIC and not after it.
+    pub held_stream: bool,
     /// Notified when the first tier, a relay that was still starting, can be tried: a session that
     /// began on a stream moves to it.
     pub relay_ready: Option<std::sync::Arc<tokio::sync::Notify>>,
@@ -211,11 +214,8 @@ async fn session(mut args: Args) -> u8 {
             .extend(["--compress".to_owned(), ssj_net::word(choice)]);
     }
     if let Some(command) = &args.remote_command {
-        // `ssh host command` runs the command in a shell, and so does this: the login shell of the
-        // host with `-c`.
+        // `ssh host command` runs `$SHELL -c command`, without `-l`, and so does this.
         for word in [
-            "--shell-arg",
-            "-l",
             "--shell-arg",
             "-c",
             "--shell-arg",

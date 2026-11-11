@@ -11,9 +11,9 @@ use ssj_client::options;
 /// What the options cannot show: a command on the host.
 const COMMAND: &str = r#".SH RUNNING A COMMAND
 \fBssj connect\fR \fIDESTINATION\fR \fICOMMAND\fR... runs the command in the session instead of the
-shell, as \fBssh\fR does, and ends with its exit code. The login shell of the host runs it, so
-pipes, \fB&&\fR, and \fBcd\fR work. The session survives a lost connection like any other, and can
-be joined with \fBssj attach\fR.
+shell, as \fBssh\fR does, and ends with its exit code. The shell of the host runs it with \fB-c\fR
+(not as a login shell, as with \fBssh\fR), so pipes, \fB&&\fR, and \fBcd\fR work. The session
+survives a lost connection like any other, and can be joined with \fBssj attach\fR.
 .PP
 As with \fBssh\fR, everything after the destination belongs to the command, options included:
 \fBssj connect host ls \-la\fR runs \fBls \-la\fR on the host. Options of \fBssj\fR go before the

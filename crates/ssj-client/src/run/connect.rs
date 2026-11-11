@@ -609,16 +609,17 @@ pub(super) async fn connect_session(
             connect.udp
         );
         let tiers = build_tiers(&args, &connect, ssh.as_ref(), address, relayed).await?;
+        let held_stream = held.is_some() && tiers.iter().any(|t| matches!(t, Tier::Stream { .. }));
         let tiers = with_first_stream_held(tiers, held);
         vlog!(
             1,
             "transports in order: {}",
             tiers.iter().map(Tier::name).collect::<Vec<_>>().join(", ")
         );
-        Ok::<_, String>((connect, new, env, tiers, agent, relay_ready))
+        Ok::<_, String>((connect, new, env, tiers, held_stream, agent, relay_ready))
     }
     .await;
-    let (connect, new_session, env, tiers, agent, relay_ready) = match prepared {
+    let (connect, new_session, env, tiers, held_stream, agent, relay_ready) = match prepared {
         Ok(prepared) => prepared,
         Err(message) => {
             eprintln!("ssj: {message}");
@@ -669,6 +670,7 @@ pub(super) async fn connect_session(
             identity,
             connect,
             tiers,
+            held_stream,
             relay_ready,
             attempt_timeout: ATTEMPT_TIMEOUT,
             first_attempt_timeout: FIRST_ATTEMPT_TIMEOUT,

@@ -161,6 +161,7 @@ async fn a_program_in_the_session_reaches_the_agent_of_the_client_but_only_for_s
             name: "stdio",
             dial,
         }],
+        held_stream: false,
         attempt_timeout: Duration::from_secs(8),
         first_attempt_timeout: Duration::from_secs(8),
         stream_dead_after: Duration::from_secs(60),

@@ -232,7 +232,8 @@ has no history: the shell shows its prompt again, and a full-screen program draw
 `ssj connect user@host COMMAND...` runs the command in the session instead of the shell, as
 `ssh user@host COMMAND` does, and ends with its exit code.
 
-- The login shell of the host runs it (`$SHELL -l -c 'COMMAND'`), so pipes, `&&`, and `cd` work.
+- The shell of the host runs it (`$SHELL -c 'COMMAND'`, not a login shell, as with `ssh`), so pipes,
+  `&&`, and `cd` work.
 - A long `make` or a `tail -f` survives a network change or a closed laptop like any other
   session. You can join it from another terminal (it has a name in `ssj list`).
 - As with `ssh`, everything after the host belongs to the command, options included:

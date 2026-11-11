@@ -232,7 +232,21 @@ The choice is `--transport auto|udp|stdio` or `transport` in `client.toml`. `aut
 races UDP against the first stream (the `ssh` channel): QUIC starts first, the stream starts 300
 milliseconds later if QUIC has not opened, and the first connection that opens carries the
 session. Before the first connection QUIC is given 1.5 seconds and the stream, which needs a whole
-`ssh` handshake that takes seconds on a distant host, gets 8 seconds. A reconnect
+`ssh` handshake that takes seconds on a distant host, gets 8 seconds.
+
+The first connection is the exception when the server holds the `ssh` of the bootstrap: that
+stream needs no login, and it carries the `Start` and the `Welcome` in one round trip, while QUIC
+needs three (the retry, the handshake, and the hello). Both start at once then. If the stream
+wins, the QUIC attempt keeps opening, and the session moves to it after one second on the stream
+(`MOVE_TO_QUIC_AFTER`), so a short command ends on the stream and a longer one roams over QUIC.
+The second matters on Wi-Fi: the access point of a host in power save can hold the last packets of
+the handshake for 100 to 300 ms while QUIC already counts as open on the client, and a move then
+stops the output for that long. With `ssj connect host ls` on a LAN over Wi-Fi this took the
+command from 0.90 s (`ssh` 0.52 s) to 0.53 s. A server before 0.2.1 does not send the exit status
+again to a connection that replaces another, so a command that ends during the move hangs there;
+`ssj install` updates it.
+
+A reconnect
 races the same way: when the session runs on a stream, the stream starts at once and
 QUIC beside it, so a network where UDP works again is found without a delay and a network where it
 does not costs nothing. A change of the network while the session is on a stream also tries QUIC
@@ -1219,9 +1233,10 @@ Rules (nobody listens, and `wait` mode):
 
 The session starts the command and not an interactive shell, and ends with its exit code.
 
-- The client passes `--shell-arg -l --shell-arg -c --shell-arg <command>` to the server, so the
-  login shell of the host (`--shell`, else `$SHELL`) runs `$SHELL -l -c '<command>'`, as `sshd`
-  does for `ssh host command`. The words are joined with spaces and the shell of the host reads
+- The client passes `--shell-arg -c --shell-arg <command>` to the server, so the
+  shell of the host (`--shell`, else `$SHELL`) runs `$SHELL -c '<command>'`, as `sshd`
+  does for `ssh host command`: not as a login shell, so `.zprofile` and `.bash_profile` are not
+  read (an earlier version passed `-l`, which made a command differ from `ssh host command`). The words are joined with spaces and the shell of the host reads
   the result, so one quoted word is a whole shell command line.
 - The command has a terminal like every session (the output of `ssh -t host command`): the
   session survives a lost connection, the command can be joined again with `ssj attach`, and the

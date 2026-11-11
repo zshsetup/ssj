@@ -117,6 +117,7 @@ async fn a_stream_that_is_slow_to_open_is_not_given_up_after_the_short_first_tim
                 dial: failing,
             },
         ],
+        held_stream: false,
         attempt_timeout: Duration::from_secs(8),
         first_attempt_timeout: Duration::from_millis(300),
         stream_dead_after: Duration::from_secs(60),
