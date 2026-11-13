@@ -564,6 +564,7 @@ impl<B: Backend> Actor<B> {
                 // A program redraws when the size changes, so it is made to change and to change
                 // back. The pause lets it see the first size before the second.
                 let narrower = WindowSize::new(size.rows(), size.cols().saturating_sub(1).max(1))
+                    .map(|n| n.with_pixels(size.xpixel(), size.ypixel()))
                     .filter(|n| *n != size);
                 if let Some(narrower) = narrower {
                     self.resize(narrower);

@@ -274,15 +274,14 @@ fn peeking_agrees_with_decoding() {
 }
 
 // postcard takes a number that is written longer than it needs to be, so a frame can decode from
-// bytes that it does not encode to. Both inputs were found by the fuzzer; the frame has to
-// survive the round trip all the same.
+// bytes that it does not encode to. The server input was found by the fuzzer; the client input
+// is a resize with a row count of 24 written in two bytes (the fuzzer input of protocol 2 had
+// the layout of the old window size). The frame has to survive the round trip all the same.
 #[test]
 fn a_number_written_too_long_decodes_and_the_frame_survives_a_round_trip() {
-    let client = [
-        0, 0, 0, 10, 0, 1, 91, 90, 255, 253, 160, 255, 255, 0, 64, 0, 165,
-    ];
+    let client = [0, 0, 0, 6, 2, 152, 0, 80, 0, 0, 7];
     let (frame, used) = decode_client(&client).unwrap().unwrap();
-    assert_eq!(used, 14);
+    assert_eq!(used, 10);
     let mut again = Vec::new();
     frame.encode(&mut again).unwrap();
     assert_ne!(again, &client[..used]);

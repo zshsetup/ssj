@@ -77,7 +77,7 @@ the `SHA256SUMS` of the release, or as `--server-binary`) gets no download and n
 
 ```text
 ~/.local/share/ssj/bin/
-└── ssj-server-p1              # `p1` is the protocol version; other versions sit side by side
+└── ssj-server-p3              # `p3` is the protocol version; other versions sit side by side
 ```
 
 Running it again upgrades a host: it replaces the file of the same protocol with the one of your
@@ -507,6 +507,7 @@ A client and a server talk only if they speak the same protocol version.
 | -------- | ------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | 1 | 0.1.0 | First published format. It includes the `Gap`, `Compressed`, and `Detached` frames and the frames of agent forwarding. |
 | 2 | 0.2.0 | The frames are encoded with `postcard`. |
+| 3 | 0.3.0 | The window size carries the size of the terminal in pixels, so programs on the host find the size of a cell. |
 
 ## Development
 

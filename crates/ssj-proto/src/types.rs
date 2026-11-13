@@ -2,22 +2,42 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Terminal dimensions in character cells, always between 1 and [`WindowSize::MAX`].
+/// Terminal dimensions in character cells, always between 1 and [`WindowSize::MAX`], and the size
+/// of the terminal in pixels (0 if the terminal does not tell).
+///
+/// The pixel size lets programs on the host find the size of a cell, as they do over `ssh`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "(u16, u16)", into = "(u16, u16)")]
+#[serde(try_from = "(u16, u16, u16, u16)", into = "(u16, u16, u16, u16)")]
 pub struct WindowSize {
     rows: u16,
     cols: u16,
+    xpixel: u16,
+    ypixel: u16,
 }
 
 impl WindowSize {
     /// Largest number of rows or columns.
     pub const MAX: u16 = 4096;
 
-    /// Returns `None` if a dimension is zero or larger than [`WindowSize::MAX`].
+    /// Returns `None` if a dimension is zero or larger than [`WindowSize::MAX`]. The pixel size is
+    /// unknown (0).
     pub fn new(rows: u16, cols: u16) -> Option<Self> {
         let valid = 1..=Self::MAX;
-        (valid.contains(&rows) && valid.contains(&cols)).then_some(Self { rows, cols })
+        (valid.contains(&rows) && valid.contains(&cols)).then_some(Self {
+            rows,
+            cols,
+            xpixel: 0,
+            ypixel: 0,
+        })
+    }
+
+    /// Returns the size with the given size of the terminal in pixels.
+    pub fn with_pixels(self, xpixel: u16, ypixel: u16) -> Self {
+        Self {
+            xpixel,
+            ypixel,
+            ..self
+        }
     }
 
     pub fn rows(self) -> u16 {
@@ -27,19 +47,31 @@ impl WindowSize {
     pub fn cols(self) -> u16 {
         self.cols
     }
-}
 
-impl TryFrom<(u16, u16)> for WindowSize {
-    type Error = &'static str;
+    /// Width of the terminal in pixels, or 0 if unknown.
+    pub fn xpixel(self) -> u16 {
+        self.xpixel
+    }
 
-    fn try_from((rows, cols): (u16, u16)) -> Result<Self, &'static str> {
-        Self::new(rows, cols).ok_or("a window size out of range")
+    /// Height of the terminal in pixels, or 0 if unknown.
+    pub fn ypixel(self) -> u16 {
+        self.ypixel
     }
 }
 
-impl From<WindowSize> for (u16, u16) {
+impl TryFrom<(u16, u16, u16, u16)> for WindowSize {
+    type Error = &'static str;
+
+    fn try_from((rows, cols, xpixel, ypixel): (u16, u16, u16, u16)) -> Result<Self, &'static str> {
+        Self::new(rows, cols)
+            .map(|size| size.with_pixels(xpixel, ypixel))
+            .ok_or("a window size out of range")
+    }
+}
+
+impl From<WindowSize> for (u16, u16, u16, u16) {
     fn from(size: WindowSize) -> Self {
-        (size.rows, size.cols)
+        (size.rows, size.cols, size.xpixel, size.ypixel)
     }
 }
 

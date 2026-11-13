@@ -5,7 +5,7 @@ use ssj_proto::frame::MAX_DATA_LEN;
 use ssj_proto::{ClientFrame, Env, ErrorCode, ExitStatus, Hello, ServerFrame, Welcome, WindowSize};
 
 pub fn size() -> WindowSize {
-    WindowSize::new(24, 80).unwrap()
+    WindowSize::new(24, 80).unwrap().with_pixels(640, 384)
 }
 
 pub fn client_frames() -> Vec<ClientFrame> {
@@ -33,7 +33,11 @@ pub fn client_frames() -> Vec<ClientFrame> {
         ClientFrame::Input(b"ls\r".to_vec()),
         ClientFrame::Input(vec![7; MAX_DATA_LEN]),
         ClientFrame::Compressed(vec![0x4b, 0x4c, 0x4a, 0x06, 0x00]),
-        ClientFrame::Resize(WindowSize::new(1, WindowSize::MAX).unwrap()),
+        ClientFrame::Resize(
+            WindowSize::new(1, WindowSize::MAX)
+                .unwrap()
+                .with_pixels(u16::MAX, u16::MAX),
+        ),
         ClientFrame::OutputAck(12345),
         ClientFrame::Close,
         ClientFrame::Detach,
