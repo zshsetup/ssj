@@ -579,6 +579,11 @@ fn ssj_typing(runtime: &Path, ssh: &Path, words: &[&str], steps: &[(&str, &str)]
                 server_binary().to_str().unwrap(),
                 "--udp-host",
                 "127.0.0.1",
+                // a session that begins on the stream moves to QUIC after a second. A key typed at
+                // that moment, such as the detach key, goes out on the old connection, which the
+                // server no longer listens to, and the session would count as disconnected.
+                "--transport",
+                "udp",
             ],
         ))
         .args(given(words, &LEAK_GUARD))
@@ -2279,7 +2284,9 @@ fn detached_session(host: &Host, ssh: &Path) {
         &host.runtime,
         ssh,
         &["connect", "--detach-key", "ctrl-]", "user@localhost"],
-        &[("x\x1d", "")],
+        // the key is typed after the shell has answered, as the client has no connection to send
+        // the detach over before. The sum keeps the typed command from matching the answer.
+        &[("echo rea$((1+1))dy\n", "rea2dy"), ("\x1d", "")],
     );
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     // the server notes the detach a moment after the client has gone
