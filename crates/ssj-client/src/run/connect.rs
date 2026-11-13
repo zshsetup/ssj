@@ -1,5 +1,6 @@
 //! The start of a connection: the server on the host, the environment, and the transports.
 
+use std::ffi::OsString;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
@@ -29,15 +30,12 @@ use crate::terminal::{RawMode, window_size};
 use crate::tunnel::{Held, Kind, SshConfig, ssh_config_of, with_held};
 use crate::vlog;
 
-/// The agent socket to forward, if the user asked for it.
-fn agent_socket(args: &Args) -> Result<Option<PathBuf>, String> {
-    if !args.forward_agent {
-        return Ok(None);
-    }
-    match std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from) {
-        Some(path) if path.is_absolute() => Ok(Some(path)),
-        _ => Err("agent forwarding needs SSH_AUTH_SOCK, and there is no agent running".to_owned()),
-    }
+/// Returns the agent socket to forward, or `None` if the user did not ask for it or there is no
+/// usable agent.
+fn agent_socket(forward: bool, socket: Option<OsString>) -> Option<PathBuf> {
+    socket
+        .map(PathBuf::from)
+        .filter(|path| forward && path.is_absolute())
 }
 
 /// Selected variables of the local environment, see [`send_patterns`].
@@ -570,7 +568,14 @@ pub(super) async fn connect_session(
             ssh.as_ref().is_some_and(|c| c.jump)
         );
         let env = local_env(&args, ssh.as_ref())?;
-        let agent = agent_socket(&args)?;
+        let agent = agent_socket(args.forward_agent, std::env::var_os("SSH_AUTH_SOCK"));
+        if args.forward_agent && agent.is_none() {
+            // the connection goes on, as the shell is useful without the agent
+            say(
+                &args,
+                "ssj: warning: no agent running (SSH_AUTH_SOCK is not set), so the agent is not forwarded",
+            );
+        }
         let prestart = fresh.then(|| Prestart {
             size: window_size(),
             env: env.clone(),
@@ -720,6 +725,20 @@ pub(super) async fn connect_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn socket(path: &str) -> Option<OsString> {
+        Some(OsString::from(path))
+    }
+
+    #[test]
+    fn an_agent_is_forwarded_only_when_asked_for_and_present() {
+        let path = PathBuf::from("/run/agent.sock");
+        assert_eq!(agent_socket(true, socket("/run/agent.sock")), Some(path));
+        assert_eq!(agent_socket(false, socket("/run/agent.sock")), None);
+        assert_eq!(agent_socket(true, None), None);
+        // a relative path cannot be the socket of an agent
+        assert_eq!(agent_socket(true, socket("agent.sock")), None);
+    }
 
     fn vars() -> Vec<(String, String)> {
         [

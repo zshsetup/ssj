@@ -352,6 +352,8 @@ A job keeps running while no client is connected.
 `ssj connect -A host` (or `forward_agent = true` in `client.toml`) lets programs on the host, such as
 `git` or a second `ssh`, use the ssh agent of your machine.
 
+- Without an agent on your machine (`SSH_AUTH_SOCK` is not set), `ssj` prints a warning and
+  connects without forwarding.
 - The host never gets the keys, but anybody who can use the `SSH_AUTH_SOCK` of the shell there can
   have the agent sign while you are connected. Use it only on hosts you trust.
 - Only listing the keys and signing are passed on. Adding, removing, and locking keys, and keys
