@@ -105,9 +105,19 @@ impl Link {
     }
 
     /// Lets the writer deliver what is queued, then ends the link.
-    async fn finish(self) {
+    ///
+    /// A stream that runs through `ssh` is not ended before the server has closed it: `ssh` is
+    /// killed when the link is dropped, and it may not have passed on the last frame (a detach)
+    /// yet, which would leave the session `disconnected` and not `detached`.
+    async fn finish(mut self) {
         drop(self.out);
         let _ = timeout(FLUSH_TIMEOUT * 2, self.writer).await;
+        if self.quic.is_none() && self._guard.is_some() {
+            let _ = timeout(FLUSH_TIMEOUT, async {
+                while let Ok(Some(_)) = self.reader.next().await {}
+            })
+            .await;
+        }
     }
 }
 
