@@ -714,11 +714,13 @@ async fn the_detach_command_tells_the_client_to_leave_and_the_shell_keeps_runnin
 
 #[tokio::test]
 async fn an_attach_makes_the_program_redraw_by_changing_the_size_and_back() {
-    // the shell reports the size at every SIGWINCH, and sees one within 10 ms: the server waits
-    // 60 ms between the two sizes, and two signals that come before the shell looks are one.
+    // the shell reports the size at every SIGWINCH. It waits for a background `sleep`, which a
+    // signal ends at once, and not for a foreground one, which would delay the trap by the start of
+    // a process: the server waits 60 ms between the two sizes, and two signals that come before
+    // the shell looks are one.
     // The output is longer than the replay buffer, so the replay cannot draw the screen.
     let script = "trap 'echo size:$(stty size)' WINCH; head -c 20000 /dev/zero | tr '\\0' x; echo; \
-        echo ready; while true; do sleep 0.01; done";
+        echo ready; while true; do sleep 1 & wait $!; done";
     let mut cfg = config(script);
     cfg.replay_capacity = 8 * 1024;
     // the test client does not acknowledge, so the job must not wait for it.

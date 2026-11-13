@@ -157,6 +157,13 @@ fn free_port() -> u16 {
     }
 }
 
+/// The ports that a server may take, from the one that [`free_port`] found. The client learns the
+/// port from the server, so if another process takes the first port before the server binds it,
+/// the server uses the next one and not fail with "no free UDP port".
+fn port_range(port: u16) -> String {
+    format!("{port}:{}", port + 9)
+}
+
 /// Runs `ssj` with `input` on stdin and a shell command for the server, and waits for it.
 fn run_client(ssh: &Path, shell_args: &[&str], input: &str) -> Output {
     run_client_with(ssh, shell_args, input, &[])
@@ -189,7 +196,7 @@ fn run_client_to(
     command
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
-        .args(["--port-range", &format!("{port}:{port}")]);
+        .args(["--port-range", &port_range(port)]);
     if let Some(host) = udp_host {
         command.args(["--udp-host", host]);
     }
@@ -264,7 +271,7 @@ fn run_with_command(ssh: &Path, words: &[&str]) -> Output {
         .arg("connect")
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
-        .args(["--port-range", &format!("{port}:{port}")])
+        .args(["--port-range", &port_range(port)])
         .args(["--udp-host", "127.0.0.1"])
         .args(LEAK_GUARD)
         .args(["--server-arg", "--shell", "--server-arg", "/bin/sh"])
@@ -370,12 +377,7 @@ fn terminal_session(extra: &[&str]) -> (String, Option<i32>) {
         .args(extra)
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
-        .args([
-            "--udp-host",
-            "127.0.0.1",
-            "--port-range",
-            &format!("{port}:{port}"),
-        ])
+        .args(["--udp-host", "127.0.0.1", "--port-range", &port_range(port)])
         .args([
             "--detached-timeout",
             "5",
@@ -579,6 +581,11 @@ fn ssj_typing(runtime: &Path, ssh: &Path, words: &[&str], steps: &[(&str, &str)]
                 server_binary().to_str().unwrap(),
                 "--udp-host",
                 "127.0.0.1",
+                // a session that begins on the stream moves to QUIC after a second. A key typed at
+                // that moment, such as the detach key, goes out on the old connection, which the
+                // server no longer listens to, and the session would count as disconnected.
+                "--transport",
+                "udp",
             ],
         ))
         .args(given(words, &LEAK_GUARD))
@@ -997,7 +1004,7 @@ impl Host {
         words.extend(extra.iter().map(|w| (*w).to_owned()));
         for arg in [
             "--port-range",
-            &format!("{port}:{port}"),
+            &port_range(port),
             "--detached-timeout",
             "5",
             "--server-arg",
@@ -1672,9 +1679,18 @@ fn note_forwarding(marker: &Path) -> String {
 
 #[test]
 fn udp_is_used_when_it_works_and_a_jump_host_leaves_it_out() {
-    for (config, order) in [("", "udp, stdio"), ("proxyjump bastion\n", "stdio")] {
+    // the jump host gets no relay and so no name lookup: where a lookup takes seconds to fail (a
+    // container without DNS), the server has ended its unjoined session by the time it is done.
+    for (config, order, extra) in [
+        ("", "udp, stdio", vec!["-v"]),
+        (
+            "proxyjump bastion\n",
+            "stdio",
+            vec!["-v", "--relay", "none"],
+        ),
+    ] {
         let ssh = transport_ssh(config, "");
-        let output = run_client_with(&ssh, &ASK, "xyz\n", &["-v"]);
+        let output = run_client_with(&ssh, &ASK, "xyz\n", &extra);
         assert_session(&output);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -1904,7 +1920,7 @@ fn typed_on_a_terminal(local_echo: &str) -> String {
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
         .args(["--udp-host", "127.0.0.1", "--local-echo", local_echo])
-        .args(["--port-range", &format!("{port}:{port}")])
+        .args(["--port-range", &port_range(port)])
         .args(["--detached-timeout", "5", "--server-arg", "--max-detached"])
         .args(["--server-arg", "30", "--server-arg", "--shell"])
         .args(["--server-arg", "/bin/sh", "--server-arg", "--shell-arg"])
@@ -2279,7 +2295,9 @@ fn detached_session(host: &Host, ssh: &Path) {
         &host.runtime,
         ssh,
         &["connect", "--detach-key", "ctrl-]", "user@localhost"],
-        &[("x\x1d", "")],
+        // the key is typed after the shell has answered, as the client has no connection to send
+        // the detach over before. The sum keeps the typed command from matching the answer.
+        &[("echo rea$((1+1))dy\n", "rea2dy"), ("\x1d", "")],
     );
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     // the server notes the detach a moment after the client has gone

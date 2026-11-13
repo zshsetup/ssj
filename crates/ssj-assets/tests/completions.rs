@@ -176,7 +176,8 @@ fn zsh_complete(lines: &[&str]) -> Option<Vec<String>> {
          autoload -U compinit; compinit -u -d '{}/zcompdump'\n\
          _ssh_hosts() {{ compadd -- boxa boxb box-c }}\n\
          zstyle ':completion:*' matcher-list 'm:{{[:lower:][:upper:]}}={{[:upper:][:lower:]}}' 'r:|=*' 'l:|=* r:|=*'\n\
-         LISTMAX=1000; setopt AUTO_LIST; unsetopt AUTO_MENU LIST_AMBIGUOUS; PS1='> '\n",
+         LISTMAX=1000; setopt AUTO_LIST; unsetopt AUTO_MENU LIST_AMBIGUOUS; PS1='> '\n\
+         _ssj_done() {{ zle -M '@@DONE@@' }}; zle -N _ssj_done; bindkey '^X^D' _ssj_done\n",
         dir.display(),
         completions.parent().unwrap().display(),
         dir.display(),
@@ -185,22 +186,28 @@ fn zsh_complete(lines: &[&str]) -> Option<Vec<String>> {
     let outer = format!(
         r#"zmodload zsh/zpty 2>/dev/null || exit 3
 zpty z "zsh -f -i"
-# reads what zsh shows until it has been quiet for a while
+# reads what zsh shows until it has been quiet for a while. With a marker it reads until the
+# marker has come, and then until the output has been quiet for a moment: zsh answers in order, so
+# the marker shows that the answer is complete, where a loaded machine can take longer than any
+# quiet period to start answering.
 drain() {{
-  local chunk waited=0 limit=${{1:-30}}
+  local chunk waited=0 limit=${{1:-30}} marker=$2
   buf=
   while (( waited < limit )); do
-    if zpty -r -t z chunk; then buf+=$chunk; waited=0; limit=6
+    if zpty -r -t z chunk; then
+      buf+=$chunk; waited=0
+      if [[ -z $marker ]]; then limit=6
+      elif [[ $buf == *$marker* ]]; then limit=2; fi
     else sleep 0.05; (( waited++ )); fi
   done
 }}
-zpty -w z "cd '{}'; source '{}/inner.zsh'"
-drain 60
+zpty -w z "cd '{}'; source '{}/inner.zsh'; print @@RE''ADY@@"
+drain 600 @@READY@@
 for line in "$@"; do
   zpty -w -n z $'\025'; drain 8
-  zpty -w -n z "$line"$'\t'; drain
+  zpty -w -n z "$line"$'\t\030\004'; drain 600 @@DONE@@
   print -r -- "@@@ $line"
-  print -r -- "$buf" | sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr '\r\010\007' '   ' | tr -s ' \n' ' '
+  print -r -- "$buf" | sed -e 's/@@DONE@@//' -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr '\r\010\007' '   ' | tr -s ' \n' ' '
 done
 "#,
         work.display(),
