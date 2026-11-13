@@ -215,12 +215,7 @@ async fn session(mut args: Args) -> u8 {
     }
     if let Some(command) = &args.remote_command {
         // `ssh host command` runs `$SHELL -c command`, without `-l`, and so does this.
-        for word in [
-            "--shell-arg",
-            "-c",
-            "--shell-arg",
-            command,
-        ] {
+        for word in ["--shell-arg", "-c", "--shell-arg", command] {
             args.server_args.push(word.to_owned());
         }
     }
