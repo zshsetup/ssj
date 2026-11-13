@@ -134,7 +134,10 @@ protocol version, and two peers talk only if their versions are equal.
   data chunk that is empty or above 32 KiB, an empty `Gap`, a window size outside 1 to 4096, and
   an environment that `Env` refuses. `Output` is the first variant of the server frames, so that
   `peek_server` finds its data from the first byte of the body. Protocol 2 replaced the format of
-  protocol 1, which was written by hand with a type byte and fixed-width integers.
+  protocol 1, which was written by hand with a type byte and fixed-width integers. Protocol 3
+  added the size of the terminal in pixels to the window size (width and height as `u16`, 0 if the
+  terminal does not tell). The server sets it on the terminal of the shell, so that programs find
+  the size of a cell as they do over `ssh`.
 
 ### Reconnect (client)
 

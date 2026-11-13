@@ -36,7 +36,10 @@ impl Drop for RawMode {
 pub fn window_size() -> WindowSize {
     tcgetwinsize(stdin())
         .ok()
-        .and_then(|size| WindowSize::new(size.ws_row, size.ws_col))
+        .and_then(|size| {
+            WindowSize::new(size.ws_row, size.ws_col)
+                .map(|window| window.with_pixels(size.ws_xpixel, size.ws_ypixel))
+        })
         .unwrap_or_else(|| WindowSize::new(24, 80).expect("valid size"))
 }
 

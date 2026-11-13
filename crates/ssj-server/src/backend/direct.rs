@@ -24,7 +24,7 @@ pub struct DirectShell {
 pub struct DirectWriter(pty_process::OwnedWritePty);
 
 fn to_size(size: WindowSize) -> Size {
-    Size::new(size.rows(), size.cols())
+    Size::new_with_pixel(size.rows(), size.cols(), size.xpixel(), size.ypixel())
 }
 
 fn to_io(err: pty_process::Error) -> io::Error {
@@ -92,5 +92,27 @@ impl AsyncWrite for DirectWriter {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rustix::termios::Winsize;
+
+    use super::*;
+
+    #[test]
+    fn the_pixel_size_reaches_the_terminal_of_the_shell() {
+        let size = WindowSize::new(57, 94).unwrap().with_pixels(752, 913);
+        let winsize = Winsize::from(to_size(size));
+        assert_eq!(
+            (
+                winsize.ws_row,
+                winsize.ws_col,
+                winsize.ws_xpixel,
+                winsize.ws_ypixel
+            ),
+            (57, 94, 752, 913)
+        );
     }
 }

@@ -11,7 +11,7 @@ clap = { workspace = true, features = ["derive", "error-context", "help", "std",
 confique.workspace = true
 pty-process = { workspace = true, features = ["async"] }
 quinn.workspace = true
-rustix = { workspace = true, features = ["fs", "process", "stdio", "system"] }
+rustix = { workspace = true, features = ["fs", "process", "stdio", "system", "termios"] }
 serde.workspace = true
 socket2 = { workspace = true, features = ["all"] }
 ssj-config.workspace = true

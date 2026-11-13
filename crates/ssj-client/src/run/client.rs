@@ -114,8 +114,9 @@ impl Link {
 /// Makes the program in the session draw its screen again, by changing the size of the terminal
 /// for a moment: debug lines that were written over the screen are then gone.
 async fn redraw(size: WindowSize, out: &mpsc::UnboundedSender<ClientFrame>) {
-    let narrower =
-        WindowSize::new(size.rows(), size.cols().saturating_sub(1).max(1)).filter(|n| *n != size);
+    let narrower = WindowSize::new(size.rows(), size.cols().saturating_sub(1).max(1))
+        .map(|n| n.with_pixels(size.xpixel(), size.ypixel()))
+        .filter(|n| *n != size);
     if let Some(narrower) = narrower {
         let _ = out.send(ClientFrame::Resize(narrower));
         sleep(Duration::from_millis(60)).await;
