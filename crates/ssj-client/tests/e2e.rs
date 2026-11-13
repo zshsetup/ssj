@@ -1679,9 +1679,18 @@ fn note_forwarding(marker: &Path) -> String {
 
 #[test]
 fn udp_is_used_when_it_works_and_a_jump_host_leaves_it_out() {
-    for (config, order) in [("", "udp, stdio"), ("proxyjump bastion\n", "stdio")] {
+    // the jump host gets no relay and so no name lookup: where a lookup takes seconds to fail (a
+    // container without DNS), the server has ended its unjoined session by the time it is done.
+    for (config, order, extra) in [
+        ("", "udp, stdio", vec!["-v"]),
+        (
+            "proxyjump bastion\n",
+            "stdio",
+            vec!["-v", "--relay", "none"],
+        ),
+    ] {
         let ssh = transport_ssh(config, "");
-        let output = run_client_with(&ssh, &ASK, "xyz\n", &["-v"]);
+        let output = run_client_with(&ssh, &ASK, "xyz\n", &extra);
         assert_session(&output);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
