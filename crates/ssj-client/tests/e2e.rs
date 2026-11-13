@@ -581,11 +581,6 @@ fn ssj_typing(runtime: &Path, ssh: &Path, words: &[&str], steps: &[(&str, &str)]
                 server_binary().to_str().unwrap(),
                 "--udp-host",
                 "127.0.0.1",
-                // a session that begins on the stream moves to QUIC after a second. A key typed at
-                // that moment, such as the detach key, goes out on the old connection, which the
-                // server no longer listens to, and the session would count as disconnected.
-                "--transport",
-                "udp",
             ],
         ))
         .args(given(words, &LEAK_GUARD))
@@ -2291,10 +2286,18 @@ fn a_lock_that_is_held_on_the_host_stops_the_save_and_is_named() {
 
 /// A detached session on the host of the test, made as after the detach key.
 fn detached_session(host: &Host, ssh: &Path) {
+    detached_session_over(host, ssh, &[]);
+}
+
+/// As [`detached_session`], with more words for the client.
+fn detached_session_over(host: &Host, ssh: &Path, more: &[&str]) {
+    let mut words = vec!["connect", "--detach-key", "ctrl-]"];
+    words.extend_from_slice(more);
+    words.push("user@localhost");
     let output = ssj_typing(
         &host.runtime,
         ssh,
-        &["connect", "--detach-key", "ctrl-]", "user@localhost"],
+        &words,
         // the key is typed after the shell has answered, as the client has no connection to send
         // the detach over before. The sum keeps the typed command from matching the answer.
         &[("echo rea$((1+1))dy\n", "rea2dy"), ("\x1d", "")],
@@ -2332,6 +2335,17 @@ fn kill_words(host: &Host, extra: &[&str]) -> Vec<String> {
     words.extend(extra[1..].iter().map(|w| (*w).to_owned()));
     let _ = host;
     words
+}
+
+/// The client ends `ssh` when it leaves, and the detach that was written last must have been
+/// passed on by then: the session is `detached`, not `disconnected`.
+#[test]
+fn a_detach_over_ssh_reaches_the_server_before_the_client_leaves() {
+    let ssh = fake_ssh(FAKE_SSH);
+    for _ in 0..6 {
+        let host = host();
+        detached_session_over(&host, &ssh, &["--transport", "stdio"]);
+    }
 }
 
 #[test]
