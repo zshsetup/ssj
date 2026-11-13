@@ -157,6 +157,13 @@ fn free_port() -> u16 {
     }
 }
 
+/// The ports that a server may take, from the one that [`free_port`] found. The client learns the
+/// port from the server, so if another process takes the first port before the server binds it,
+/// the server uses the next one and not fail with "no free UDP port".
+fn port_range(port: u16) -> String {
+    format!("{port}:{}", port + 9)
+}
+
 /// Runs `ssj` with `input` on stdin and a shell command for the server, and waits for it.
 fn run_client(ssh: &Path, shell_args: &[&str], input: &str) -> Output {
     run_client_with(ssh, shell_args, input, &[])
@@ -189,7 +196,7 @@ fn run_client_to(
     command
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
-        .args(["--port-range", &format!("{port}:{port}")]);
+        .args(["--port-range", &port_range(port)]);
     if let Some(host) = udp_host {
         command.args(["--udp-host", host]);
     }
@@ -264,7 +271,7 @@ fn run_with_command(ssh: &Path, words: &[&str]) -> Output {
         .arg("connect")
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
-        .args(["--port-range", &format!("{port}:{port}")])
+        .args(["--port-range", &port_range(port)])
         .args(["--udp-host", "127.0.0.1"])
         .args(LEAK_GUARD)
         .args(["--server-arg", "--shell", "--server-arg", "/bin/sh"])
@@ -370,12 +377,7 @@ fn terminal_session(extra: &[&str]) -> (String, Option<i32>) {
         .args(extra)
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
-        .args([
-            "--udp-host",
-            "127.0.0.1",
-            "--port-range",
-            &format!("{port}:{port}"),
-        ])
+        .args(["--udp-host", "127.0.0.1", "--port-range", &port_range(port)])
         .args([
             "--detached-timeout",
             "5",
@@ -1002,7 +1004,7 @@ impl Host {
         words.extend(extra.iter().map(|w| (*w).to_owned()));
         for arg in [
             "--port-range",
-            &format!("{port}:{port}"),
+            &port_range(port),
             "--detached-timeout",
             "5",
             "--server-arg",
@@ -1909,7 +1911,7 @@ fn typed_on_a_terminal(local_echo: &str) -> String {
         .args(["--ssh-command", ssh.to_str().unwrap()])
         .args(["--server-path", server_binary().to_str().unwrap()])
         .args(["--udp-host", "127.0.0.1", "--local-echo", local_echo])
-        .args(["--port-range", &format!("{port}:{port}")])
+        .args(["--port-range", &port_range(port)])
         .args(["--detached-timeout", "5", "--server-arg", "--max-detached"])
         .args(["--server-arg", "30", "--server-arg", "--shell"])
         .args(["--server-arg", "/bin/sh", "--server-arg", "--shell-arg"])
